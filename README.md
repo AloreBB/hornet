@@ -85,6 +85,9 @@ hornet whitelist add container miapp   # saltar check de /tmp para un contenedor
 hornet whitelist add ext dylib         # extensión segura adicional
 
 hornet whitelist remove port 8080
+
+# Desinstalar
+hornet uninstall
 ```
 
 ## Estructura de `hornet.json`

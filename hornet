@@ -353,6 +353,7 @@ cmd_help() {
 - \`whitelist list\`               Show all whitelisted values
 - \`whitelist add <type> <val>\`   Add to whitelist
 - \`whitelist remove <type> <val>\` Remove from whitelist
+- \`uninstall\`                    Remove Hornet from this system
 
 **Whitelist types:**
 - \`port\`       Open port that should not trigger alerts (e.g. 25565)
@@ -369,6 +370,43 @@ Run \`hornet setup\` to configure, or edit \`hornet.json\` directly."
     echo
 }
 
+cmd_uninstall() {
+    echo
+    header "🕸️  HORNET — Uninstall"
+    echo
+    gum style --foreground 240 "  This will remove:"
+    echo "    • $INSTALL_DIR  (Hornet files + config)"
+    echo "    • $BIN_DIR/hornet  (CLI symlink)"
+    echo "    • Cron job (if installed)"
+    echo
+
+    if ! prompt_confirm "Are you sure you want to uninstall Hornet?"; then
+        info "Uninstall cancelled."
+        exit 0
+    fi
+
+    # Remove cron
+    if crontab -l 2>/dev/null | grep -q "hornet.sh"; then
+        crontab -l 2>/dev/null | grep -v "hornet.sh" | crontab -
+        ok "Cron job removed."
+    fi
+
+    # Remove symlink
+    local bin="${HORNET_BIN:-$HOME/.local/bin}/hornet"
+    [[ -L "$bin" ]] && rm -f "$bin" && ok "Symlink removed."
+
+    # Remove install dir
+    local dir="${HORNET_DIR:-$HOME/.hornet}"
+    if [[ -d "$dir" ]]; then
+        rm -rf "$dir"
+        ok "Hornet files removed."
+    fi
+
+    echo
+    gum style --foreground 240 --italic "  Hallownest falls silent."
+    echo
+}
+
 # ── Entrypoint ────────────────────────────────────────────
 case "${1:-}" in
     run)       cmd_run ;;
@@ -376,6 +414,7 @@ case "${1:-}" in
     setup)     cmd_setup ;;
     status)    cmd_status ;;
     whitelist) cmd_whitelist "${@:2}" ;;
+    uninstall) cmd_uninstall ;;
     help|--help|-h) cmd_help ;;
     *) cmd_help ;;
 esac

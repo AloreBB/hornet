@@ -85,6 +85,9 @@ hornet whitelist add container myapp   # Skip /tmp check for a container
 hornet whitelist add ext dylib         # Additional safe extension
 
 hornet whitelist remove port 8080
+
+# Uninstall
+hornet uninstall
 ```
 
 ## `hornet.json` structure
