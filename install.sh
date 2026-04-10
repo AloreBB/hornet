@@ -106,9 +106,9 @@ step "Installing Hornet..."
 mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
 info "Downloading Hornet files..."
-curl -fsSL "$BASE_URL/hornet.sh" -o "$INSTALL_DIR/hornet.sh"
+curl -fsSL "$BASE_URL/monitor.sh" -o "$INSTALL_DIR/monitor.sh"
 curl -fsSL "$BASE_URL/hornet"    -o "$INSTALL_DIR/hornet"
-chmod +x "$INSTALL_DIR/hornet.sh" "$INSTALL_DIR/hornet"
+chmod +x "$INSTALL_DIR/monitor.sh" "$INSTALL_DIR/hornet"
 
 # Download config template only if no config exists yet
 if [[ ! -f "$INSTALL_DIR/config.json" ]]; then
@@ -137,8 +137,8 @@ if ! echo "$PATH" | grep -q "$BIN_DIR"; then
 fi
 
 # ── 5. Set up cron ────────────────────────────────────────
-if ! crontab -l 2>/dev/null | grep -q "hornet.sh"; then
-    (crontab -l 2>/dev/null; echo "*/15 * * * * $INSTALL_DIR/hornet.sh >> $INSTALL_DIR/hornet.log 2>&1") | crontab -
+if ! crontab -l 2>/dev/null | grep -q "monitor.sh"; then
+    (crontab -l 2>/dev/null; echo "*/15 * * * * $INSTALL_DIR/monitor.sh >> $INSTALL_DIR/hornet.log 2>&1") | crontab -
     ok "Cron job set up (runs every 15 min)"
 fi
 

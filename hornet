@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
 CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hornet/credentials"
 ENV_FILE="$SCRIPT_DIR/.hornet.env"   # legacy fallback
-MONITOR="$SCRIPT_DIR/hornet.sh"
+MONITOR="$SCRIPT_DIR/monitor.sh"
 BASE_RAW_URL="https://raw.githubusercontent.com/AloreBB/hornet/main"
 
 # ── Colors — Silksong palette (Silk Weave, lospec.com) ────
@@ -466,15 +466,15 @@ cmd_update() {
 
     echo
     gum spin --spinner dot --title " Downloading Hornet v${remote_version}..." -- bash -c "
-        curl -fsSL '${BASE_RAW_URL}/hornet.sh' -o '${SCRIPT_DIR}/hornet.sh.tmp' &&
+        curl -fsSL '${BASE_RAW_URL}/monitor.sh' -o '${SCRIPT_DIR}/monitor.sh.tmp' &&
         curl -fsSL '${BASE_RAW_URL}/hornet'    -o '${SCRIPT_DIR}/hornet.tmp'    &&
         curl -fsSL '${BASE_RAW_URL}/VERSION'   -o '${SCRIPT_DIR}/VERSION.tmp'
     " || { err "Download failed. Try again."; exit 1; }
 
-    mv "$SCRIPT_DIR/hornet.sh.tmp" "$SCRIPT_DIR/hornet.sh"
+    mv "$SCRIPT_DIR/monitor.sh.tmp" "$SCRIPT_DIR/monitor.sh"
     mv "$SCRIPT_DIR/hornet.tmp"    "$SCRIPT_DIR/hornet"
     mv "$SCRIPT_DIR/VERSION.tmp"   "$SCRIPT_DIR/VERSION"
-    chmod +x "$SCRIPT_DIR/hornet.sh" "$SCRIPT_DIR/hornet"
+    chmod +x "$SCRIPT_DIR/monitor.sh" "$SCRIPT_DIR/hornet"
 
     ok "Updated to v${remote_version}. Your config.json is untouched."
     echo
@@ -496,8 +496,8 @@ cmd_uninstall() {
     fi
 
     # Remove cron
-    if crontab -l 2>/dev/null | grep -q "hornet.sh"; then
-        crontab -l 2>/dev/null | grep -v "hornet.sh" | crontab -
+    if crontab -l 2>/dev/null | grep -qE "hornet.sh|monitor.sh"; then
+        crontab -l 2>/dev/null | grep -vE "hornet.sh|monitor.sh" | crontab -
         ok "Cron job removed."
     fi
 

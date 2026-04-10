@@ -151,7 +151,7 @@ crontab -l | md5sum | cut -d' ' -f1
 Add to your crontab (`crontab -e`):
 
 ```cron
-*/15 * * * * /path/to/hornet/hornet.sh >> /path/to/hornet/hornet.log 2>&1
+*/15 * * * * /path/to/hornet/monitor.sh >> /path/to/hornet/hornet.log 2>&1
 ```
 
 The installer sets this up automatically.
