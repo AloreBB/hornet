@@ -12,8 +12,11 @@ ENV_FILE="$SCRIPT_DIR/.hornet.env"   # legacy fallback
 MONITOR="$SCRIPT_DIR/hornet.sh"
 BASE_RAW_URL="https://raw.githubusercontent.com/AloreBB/hornet/main"
 
-# ── Colors ────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
+# ── Colors — Silksong palette ─────────────────────────────
+# 161 = deep crimson     (Hornet's cloak)
+# 222 = pale silk gold   (Hornet's thread)
+# 147 = soft lavender    (Hallownest depths)
+RED='\033[38;5;161m'; GREEN='\033[38;5;222m'; CYAN='\033[38;5;147m'
 BOLD='\033[1m'; RESET='\033[0m'
 
 err()  { gum log --level error "$*" 2>/dev/null || echo -e "${RED}✖ $*${RESET}" >&2; }
@@ -47,15 +50,15 @@ jq_update() { local tmp; tmp=$(jq "$1" "$CONFIG_FILE") && echo "$tmp" > "$CONFIG
 # ── UI helpers ────────────────────────────────────────────
 header() {
     gum style \
-        --border rounded --border-foreground 240 \
+        --border rounded --border-foreground 133 \
         --padding "0 2" --margin "1 0" \
         "$1"
 }
 
-prompt_input()    { gum input --prompt "  ${1}: " --placeholder "${2:-}" --value "${3:-}"; }
-prompt_password() { gum input --prompt "  ${1}: " --placeholder "tk_..." --password; }
-prompt_choose()   { local h="$1"; shift; gum choose --header "  $h" --cursor "❯ " --cursor.foreground 212 --selected.foreground 212 "$@"; }
-prompt_confirm()  { gum confirm --affirmative "Yes" --negative "No" "  $1"; }
+prompt_input()    { gum input --prompt "  ${1}: " --placeholder "${2:-}" --value "${3:-}" --prompt.foreground 147; }
+prompt_password() { gum input --prompt "  ${1}: " --placeholder "tk_..." --password --prompt.foreground 147; }
+prompt_choose()   { local h="$1"; shift; gum choose --header "  $h" --cursor "❯ " --cursor.foreground 175 --selected.foreground 175 "$@"; }
+prompt_confirm()  { gum confirm --affirmative "Yes" --negative "No" --affirmative.foreground 222 --negative.foreground 161 "  $1"; }
 
 prompt_filter() {
     # Fuzzy-pick from a list. Usage: prompt_filter "placeholder" item1 item2 ...
