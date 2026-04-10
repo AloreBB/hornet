@@ -35,9 +35,7 @@ Lightweight Linux server security monitor. Runs every 15 minutes, detects threat
 curl -fsSL https://raw.githubusercontent.com/AloreBB/hornet/main/install.sh | bash
 ```
 
-The installer may ask for your `sudo` password to install dependencies (`jq` and `gum`) into `/usr/local/bin`. If they are already installed, no password will be required.
-
-Everything else (copying Hornet, setting up PATH) happens in your home directory without elevated permissions.
+> **Note:** the installer may ask for your `sudo` password to install `jq` and `gum` into `/usr/local/bin`. If they are already installed, no password will be required. Everything else (copying Hornet, setting up PATH) happens in your home directory without elevated permissions.
 
 The installer:
 1. Installs `jq` and `gum` if missing *(requires sudo)*

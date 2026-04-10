@@ -35,9 +35,7 @@ Monitor de seguridad ligero para servidores Linux. Corre cada 15 minutos, detect
 curl -fsSL https://raw.githubusercontent.com/AloreBB/hornet/main/install.sh | bash
 ```
 
-El instalador puede pedir contraseña de `sudo` para instalar las dependencias (`jq` y `gum`) en `/usr/local/bin`. Si ya las tienes instaladas, no te la pedirá.
-
-El resto de la instalación (copiar Hornet, configurar PATH) ocurre en tu directorio home sin permisos elevados.
+> **Nota:** el instalador puede pedir contraseña de `sudo` para instalar `jq` y `gum` en `/usr/local/bin`. Si ya los tienes instalados, no te la pedirá. El resto de la instalación (copiar Hornet, configurar PATH) ocurre en tu directorio home sin permisos elevados.
 
 El instalador:
 1. Instala `jq` y `gum` si no están presentes *(requiere sudo)*
