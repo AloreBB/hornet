@@ -48,7 +48,7 @@ The installer:
 ## Setup
 
 ```bash
-hornet init     # create hornet.json from scratch
+hornet init     # create config.json from scratch
 hornet setup    # interactive wizard (ntfy, whitelists)
 ```
 
@@ -59,11 +59,21 @@ hornet setup    # recommended: interactive wizard
 # or edit config.json directly
 ```
 
-Your ntfy token goes in `.hornet.env` (auto-created, gitignored):
+The ntfy token is stored in `~/.config/hornet/credentials` (auto-created by `hornet setup`, outside the repo):
 
 ```bash
-NTFY_TOKEN=your_token_here
+hornet setup    # saves your token to ~/.config/hornet/credentials
 ```
+
+You can also export `NTFY_TOKEN` in your shell session and Hornet will pick it up directly.
+
+## Updating
+
+```bash
+hornet update
+```
+
+Compares your local version against the latest on GitHub and downloads the new files if an update is available. Your `config.json` and token are never touched.
 
 ## Usage
 
@@ -90,7 +100,7 @@ hornet whitelist remove port 8080
 hornet uninstall
 ```
 
-## `hornet.json` structure
+## `config.json` structure
 
 ```json
 {

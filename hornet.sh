@@ -7,18 +7,21 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="$SCRIPT_DIR/.hornet.env"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
 STATE_FILE="/tmp/.hornet-state"
 HOSTNAME=$(hostname)
 NOW=$(date '+%Y-%m-%d %H:%M')
 
-# --- Load env (ntfy credentials) ---
-if [[ ! -f "$ENV_FILE" ]]; then
-    echo "Error: $ENV_FILE not found"
-    exit 1
+# --- Load NTFY_TOKEN ---
+# Priority: 1) already set in environment, 2) ~/.config/hornet/credentials, 3) legacy .hornet.env
+CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hornet/credentials"
+if [[ -z "${NTFY_TOKEN:-}" ]]; then
+    if [[ -f "$CREDENTIALS_FILE" ]]; then
+        source "$CREDENTIALS_FILE"
+    elif [[ -f "$SCRIPT_DIR/.hornet.env" ]]; then
+        source "$SCRIPT_DIR/.hornet.env"
+    fi
 fi
-source "$ENV_FILE"
 
 # --- Load JSON config ---
 if [[ ! -f "$CONFIG_FILE" ]]; then

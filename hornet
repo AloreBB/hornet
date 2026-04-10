@@ -7,8 +7,10 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
-ENV_FILE="$SCRIPT_DIR/.hornet.env"
+CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hornet/credentials"
+ENV_FILE="$SCRIPT_DIR/.hornet.env"   # legacy fallback
 MONITOR="$SCRIPT_DIR/hornet.sh"
+BASE_RAW_URL="https://raw.githubusercontent.com/AloreBB/hornet/main"
 
 # ── Colors ────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
@@ -147,19 +149,22 @@ _setup_ntfy() {
          .notifications.icon  = \"$icon\""
 
     if [[ -n "$token" ]]; then
-        printf '# Hornet secrets — never commit this file\nNTFY_TOKEN=%s\n' "$token" > "$ENV_FILE"
-        chmod 600 "$ENV_FILE"
-        ok "Token saved to .hornet.env"
-    elif [[ ! -f "$ENV_FILE" ]]; then
-        printf '# Hornet secrets — never commit this file\nNTFY_TOKEN=\n' > "$ENV_FILE"
-        chmod 600 "$ENV_FILE"
+        mkdir -p "$(dirname "$CREDENTIALS_FILE")"
+        printf 'NTFY_TOKEN=%s\n' "$token" > "$CREDENTIALS_FILE"
+        chmod 600 "$CREDENTIALS_FILE"
+        ok "Token saved to $CREDENTIALS_FILE"
+    elif [[ ! -f "$CREDENTIALS_FILE" ]]; then
+        mkdir -p "$(dirname "$CREDENTIALS_FILE")"
+        printf 'NTFY_TOKEN=\n' > "$CREDENTIALS_FILE"
+        chmod 600 "$CREDENTIALS_FILE"
     fi
 
     ok "Notifications configured."
     echo
     if prompt_confirm "Send a test notification now?"; then
         local test_token=""
-        [[ -f "$ENV_FILE" ]] && test_token=$(grep '^NTFY_TOKEN=' "$ENV_FILE" | cut -d= -f2- || true)
+        [[ -f "$CREDENTIALS_FILE" ]] && test_token=$(grep '^NTFY_TOKEN=' "$CREDENTIALS_FILE" | cut -d= -f2- || true)
+        [[ -z "$test_token" && -f "$ENV_FILE" ]] && test_token=$(grep '^NTFY_TOKEN=' "$ENV_FILE" | cut -d= -f2- || true)
         gum spin --spinner dot --title " Sending test notification..." -- \
             curl -sf --max-time 10 \
                 ${test_token:+-H "Authorization: Bearer $test_token"} \
@@ -348,7 +353,8 @@ cmd_help() {
 - \`run\`                          Run a security scan now
 - \`status\`                       Show recent scan history
 - \`setup\`                        Interactive configuration wizard
-- \`init\`                         Create a fresh hornet.json
+- \`init\`                         Create a fresh config.json
+- \`update\`                       Update Hornet to the latest version
 - \`whitelist\`                    Interactive whitelist manager
 - \`whitelist list\`               Show all whitelisted values
 - \`whitelist add <type> <val>\`   Add to whitelist
@@ -362,11 +368,60 @@ cmd_help() {
 - \`ext\`        File extension to ignore in /tmp checks (e.g. so)
 
 **Config files:**
-- \`hornet.json\`   Main config — whitelists and ntfy URL/topic/icon
-- \`.hornet.env\`   Secrets only (ntfy token) — **never commit this file**
+- \`config.json\`                       Whitelists, ntfy URL/topic/icon, baseline
+- \`~/.config/hornet/credentials\`      ntfy token — kept outside the repo
 
 **Notifications:** Hornet sends alerts via ntfy (self-hosted or ntfy.sh).
-Run \`hornet setup\` to configure, or edit \`hornet.json\` directly."
+Run \`hornet setup\` to configure, or edit \`config.json\` directly."
+    echo
+}
+
+cmd_update() {
+    echo
+    header "🕸️  HORNET — Update"
+
+    local version_url="${BASE_RAW_URL}/VERSION"
+    local local_version_file="$SCRIPT_DIR/VERSION"
+    local local_version="unknown"
+    [[ -f "$local_version_file" ]] && local_version=$(cat "$local_version_file" | tr -d '[:space:]')
+
+    info "Checking for updates..."
+    local remote_version
+    remote_version=$(curl -fsSL --max-time 10 "$version_url" 2>/dev/null | tr -d '[:space:]') || {
+        err "Could not reach GitHub. Check your connection."
+        exit 1
+    }
+
+    echo
+    gum style --bold "  Installed: v${local_version}"
+    gum style --bold "  Latest:    v${remote_version}"
+    echo
+
+    if [[ "$local_version" == "$remote_version" ]]; then
+        ok "Hornet is already up to date."
+        echo
+        return
+    fi
+
+    if ! prompt_confirm "Update from v${local_version} → v${remote_version}?"; then
+        info "Update cancelled."
+        echo
+        exit 0
+    fi
+
+    echo
+    gum spin --spinner dot --title " Downloading Hornet v${remote_version}..." -- bash -c "
+        curl -fsSL '${BASE_RAW_URL}/hornet.sh' -o '${SCRIPT_DIR}/hornet.sh.tmp' &&
+        curl -fsSL '${BASE_RAW_URL}/hornet'    -o '${SCRIPT_DIR}/hornet.tmp'    &&
+        curl -fsSL '${BASE_RAW_URL}/VERSION'   -o '${SCRIPT_DIR}/VERSION.tmp'
+    " || { err "Download failed. Try again."; exit 1; }
+
+    mv "$SCRIPT_DIR/hornet.sh.tmp" "$SCRIPT_DIR/hornet.sh"
+    mv "$SCRIPT_DIR/hornet.tmp"    "$SCRIPT_DIR/hornet"
+    mv "$SCRIPT_DIR/VERSION.tmp"   "$SCRIPT_DIR/VERSION"
+    chmod +x "$SCRIPT_DIR/hornet.sh" "$SCRIPT_DIR/hornet"
+
+    ok "Updated to v${remote_version}. Your config.json is untouched."
     echo
 }
 
@@ -413,6 +468,7 @@ case "${1:-}" in
     init)      cmd_init ;;
     setup)     cmd_setup ;;
     status)    cmd_status ;;
+    update)    cmd_update ;;
     whitelist) cmd_whitelist "${@:2}" ;;
     uninstall) cmd_uninstall ;;
     help|--help|-h) cmd_help ;;

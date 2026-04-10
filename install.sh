@@ -115,11 +115,12 @@ if [[ ! -f "$INSTALL_DIR/config.json" ]]; then
     curl -fsSL "$BASE_URL/config.json" -o "$INSTALL_DIR/config.json"
 fi
 
-# Create .hornet.env if missing
-if [[ ! -f "$INSTALL_DIR/.hornet.env" ]]; then
-    printf '# Hornet secrets — never commit this file\nNTFY_TOKEN=\n' \
-        > "$INSTALL_DIR/.hornet.env"
-    chmod 600 "$INSTALL_DIR/.hornet.env"
+# Create credentials file if missing
+CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hornet/credentials"
+if [[ ! -f "$CREDENTIALS_FILE" ]]; then
+    mkdir -p "$(dirname "$CREDENTIALS_FILE")"
+    printf 'NTFY_TOKEN=\n' > "$CREDENTIALS_FILE"
+    chmod 600 "$CREDENTIALS_FILE"
 fi
 
 # Symlink CLI
