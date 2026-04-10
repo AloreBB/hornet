@@ -8,7 +8,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.hornet.env"
-CONFIG_FILE="$SCRIPT_DIR/hornet.json"
+CONFIG_FILE="$SCRIPT_DIR/config.json"
 STATE_FILE="/tmp/.hornet-state"
 HOSTNAME=$(hostname)
 NOW=$(date '+%Y-%m-%d %H:%M')

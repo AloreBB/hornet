@@ -1,12 +1,9 @@
 # Secrets — never commit
 .hornet.env
 
-# Personal config — use hornet.example.json as template
-hornet.json
-
 # Runtime
 hornet.log
 /tmp/.hornet-state
 
-# Legacy (replaced by hornet.json)
+# Legacy
 .hornet-baseline.conf

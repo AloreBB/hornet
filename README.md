@@ -1,97 +1,103 @@
 # 🕸️ Hornet
 
+[🇬🇧 English](README.en.md)
+
 > *Hornet vigila. Hallownest no caerá.*
 
-A lightweight server security monitor that runs every 15 minutes, detects threats, and sends push alerts via [ntfy](https://ntfy.sh). Built for Linux servers running Docker.
+Monitor de seguridad ligero para servidores Linux. Corre cada 15 minutos, detecta amenazas y envía alertas push via [ntfy](https://ntfy.sh).
 
-![Hornet CLI demo](https://raw.githubusercontent.com/AloreBB/hornet/main/static/hornet-head.png)
+![Hornet CLI](https://raw.githubusercontent.com/AloreBB/hornet/main/static/hornet-head.png)
 
-## What it detects
+## ¿Qué detecta?
 
-| Check | What triggers an alert |
+| Check | Qué dispara la alerta |
 |-------|----------------------|
-| 🔌 Exposed DB ports | PostgreSQL, MySQL, MongoDB, Redis open to `0.0.0.0` |
-| 🦠 Shady processes | Executables running from `/tmp`, `/dev/shm`, `/var/tmp` |
-| 🐳 Container infection | Suspicious binaries inside container `/tmp` |
-| 🔥 CPU spike | Processes consuming >150% CPU for >1 minute |
-| 💾 RAM / Disk | Usage above configurable thresholds |
-| 🔑 fail2ban | Detects if brute-force protection goes down |
-| 🔄 Container health | Restart loops and dead containers |
-| ⏰ Crontab changes | New or modified cron jobs (persistence detection) |
-| 👤 New users / SSH keys | Backdoor detection |
-| 📡 Mining pool connections | Outbound connections to known crypto mining ports |
-| 🚪 New open ports | Ports not in your baseline |
-| 🔐 Suspicious SUID binaries | Privilege escalation detection |
+| 🔌 Puertos de BD expuestos | PostgreSQL, MySQL, MongoDB, Redis abiertos a `0.0.0.0` |
+| 🦠 Procesos sospechosos | Ejecutables corriendo desde `/tmp`, `/dev/shm`, `/var/tmp` |
+| 🐳 Infección en contenedores | Binarios sospechosos dentro del `/tmp` de un contenedor |
+| 🔥 CPU disparada | Procesos consumiendo >150% CPU por más de 1 minuto |
+| 💾 RAM / Disco | Uso por encima de los umbrales configurados |
+| 🛡️ fail2ban caído | Detecta si la protección anti fuerza bruta se apaga |
+| 🔄 Estado de contenedores | Loops de reinicio y contenedores muertos |
+| ⏰ Cambios en crontab | Cron jobs nuevos o modificados (detección de persistencia) |
+| 👤 Nuevos usuarios / SSH keys | Detección de backdoors |
+| 📡 Conexiones a pools de minería | Tráfico saliente a puertos de minería de criptomonedas |
+| 🚪 Puertos nuevos abiertos | Puertos que no estaban en tu línea base |
+| 🔐 Binarios SUID sospechosos | Detección de escalada de privilegios |
 
-## Requirements
+## Requisitos
 
-- `bash`
-- `jq`
-- `docker`
-- [`gum`](https://github.com/charmbracelet/gum) (installed automatically by `install.sh`)
-- A [ntfy](https://ntfy.sh) server (free public instance or self-hosted)
+- `bash`, `jq`, `docker`
+- [`gum`](https://github.com/charmbracelet/gum) — se instala automáticamente con `install.sh`
+- Servidor [ntfy](https://ntfy.sh) (instancia pública gratuita o self-hosted)
 
-## Installation
+## Instalación
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AloreBB/hornet/main/install.sh | bash
 ```
 
-The installer:
-1. Installs `jq` and `gum` if missing
-2. Copies Hornet to `~/.hornet/`
-3. Adds `hornet` to your `PATH`
-4. Runs the interactive setup wizard
+El instalador:
+1. Instala `jq` y `gum` si no están presentes
+2. Copia Hornet a `~/.hornet/`
+3. Agrega `hornet` a tu `PATH`
+4. Lanza el wizard de configuración interactivo
 
-## Setup
+## Configuración
 
 ```bash
-hornet init     # create hornet.json from scratch
-hornet setup    # interactive configuration wizard (ntfy, whitelists)
+hornet init     # crea hornet.json desde cero
+hornet setup    # wizard interactivo (ntfy, listas blancas)
 ```
 
-Configure ntfy notifications:
-- **URL**: your ntfy server (`https://ntfy.sh` or self-hosted)
-- **Topic**: your private channel name
-- **Token**: optional access token (stored in `.hornet.env`, never committed)
-
-## Usage
+El repo ya incluye `config.json` con valores de ejemplo. Solo edítalo con tus datos:
 
 ```bash
-# Run a scan now
+hornet setup    # recomendado: wizard interactivo
+# o edita config.json directamente
+```
+
+El token de ntfy va en `.hornet.env` (se crea automáticamente, está en `.gitignore`):
+
+```bash
+NTFY_TOKEN=tu_token_aqui
+```
+
+## Uso
+
+```bash
+# Ejecutar un scan ahora
 hornet run
 
-# View recent scan history
+# Ver historial de scans
 hornet status
 
-# Manage whitelists (interactive)
+# Gestionar lista blanca (interactivo)
 hornet whitelist
 
-# Manage whitelists (direct commands)
+# Gestionar lista blanca (comandos directos)
 hornet whitelist list
-hornet whitelist add port 25565        # Minecraft server
-hornet whitelist add process java      # JVM apps
-hornet whitelist add container myapp   # Skip /tmp check for a container
-hornet whitelist add ext dylib         # Additional safe extension
+hornet whitelist add port 25565        # servidor de Minecraft
+hornet whitelist add process java      # apps JVM
+hornet whitelist add container miapp   # saltar check de /tmp para un contenedor
+hornet whitelist add ext dylib         # extensión segura adicional
 
 hornet whitelist remove port 8080
 ```
 
-## Configuration
-
-Copy `hornet.example.json` to `hornet.json` and edit it, or use `hornet setup`.
+## Estructura de `hornet.json`
 
 ```json
 {
   "notifications": {
     "url": "https://ntfy.sh",
-    "topic": "my-alerts",
+    "topic": "mis-alertas",
     "icon": ""
   },
   "baseline": {
-    "users": ["root:/bin/bash", "myuser:/bin/bash"],
-    "ssh_keys": ["/home/myuser/.ssh/authorized_keys:1"],
-    "crontabs": ["myuser:HASH"]
+    "users": ["root:/bin/bash", "miusuario:/bin/bash"],
+    "ssh_keys": ["/home/miusuario/.ssh/authorized_keys:1"],
+    "crontabs": ["miusuario:HASH_MD5"]
   },
   "whitelist": {
     "ports": [22, 80, 443],
@@ -102,50 +108,69 @@ Copy `hornet.example.json` to `hornet.json` and edit it, or use `hornet setup`.
 }
 ```
 
-Your ntfy token goes in `.hornet.env` (auto-created, gitignored):
+### `baseline` — línea base del sistema
+
+Define el estado **conocido y legítimo** de tu servidor. Si algo cambia respecto a estos valores, Hornet alerta.
+
+| Campo | Qué monitorea |
+|-------|--------------|
+| `users` | Usuarios con shell de login (`user:shell`). Alerta si aparece uno nuevo. |
+| `ssh_keys` | Número de claves en `authorized_keys` (`archivo:cantidad`). Alerta si se agregan claves. |
+| `crontabs` | Hash MD5 del crontab de cada usuario. Alerta si alguien lo modifica. |
+
+Para obtener el hash de tu crontab actual:
 
 ```bash
-NTFY_TOKEN=your_token_here
+crontab -l | md5sum | cut -d' ' -f1
 ```
 
-## Scheduled scans (cron)
+### `whitelist` — excepciones conocidas
 
-Add to your crontab (`crontab -e`):
+| Campo | Qué ignora |
+|-------|-----------|
+| `ports` | Puertos abiertos a internet que son legítimos |
+| `processes` | Procesos que pueden consumir mucha CPU sin ser malware |
+| `containers` | Contenedores que extraen binarios a `/tmp` legítimamente |
+| `extensions` | Extensiones de archivo a ignorar en checks de `/tmp` |
+
+## Scans automáticos (cron)
+
+Agrega a tu crontab (`crontab -e`):
 
 ```cron
-*/15 * * * * /path/to/hornet/hornet.sh >> /path/to/hornet/hornet.log 2>&1
+*/15 * * * * /ruta/a/hornet/hornet.sh >> /ruta/a/hornet/hornet.log 2>&1
 ```
 
-Or use the installer — it sets this up automatically.
+El instalador configura esto automáticamente.
 
-## Updating the baseline
+## Actualizando la línea base
 
-When you intentionally change something (new port, new cron, new SSH key), update the baseline so Hornet stops alerting:
+Cuando hagas un cambio legítimo en tu servidor (abrir un nuevo puerto, editar el cron, agregar una SSH key), actualiza la línea base para que Hornet deje de alertar:
 
 ```bash
-# Recalculate crontab hash after editing it
-crontab -l -u $USER | md5sum | cut -d' ' -f1
-# Then update hornet.json → baseline.crontabs
+# Recalcular hash del crontab después de editarlo
+crontab -l | md5sum | cut -d' ' -f1
+# Luego actualiza hornet.json → baseline.crontabs
 
-# Or simply run setup again
+# O simplemente vuelve a correr el setup
 hornet setup
 ```
 
-## Alerts look like this (via ntfy)
+## Las alertas se ven así (via ntfy)
 
-**🔴 Critical alert:**
-> ⚔️ EXPOSED PORT — Port 5432 (PostgreSQL) open to internet in container "mydb". Close it NOW.
+**🔴 Alerta crítica:**
+> ⚔️ PUERTO EXPUESTO — Puerto 5432 (PostgreSQL) abierto a internet en contenedor "mydb". Ciérralo YA.
 
-**🟡 Warning:**
-> 🟡 MEMORY — RAM at 87% (20G/23G). Top consumers: node (2.1GB), postgres (1.4GB)...
+**🟡 Advertencia:**
+> 🟡 MEMORIA — RAM al 87% (20G/23G). Mayores consumidores: node (2.1GB), postgres (1.4GB)...
 
-**✅ Recovery:**
-> ✅ Exposed port closed (mydb)
+**✅ Recuperado:**
+> ✅ Puerto expuesto cerrado (mydb)
 
-## License
+## Licencia
 
-MIT — see [LICENSE](LICENSE)
+MIT — ver [LICENSE](LICENSE)
 
 ---
 
-*Named after Hornet from [Hollow Knight](https://www.hollowknight.com/) — the guardian of Hallownest.*
+*El nombre es un homenaje a Hornet de [Hollow Knight](https://www.hollowknight.com/) — la guardiana de Hallownest.*

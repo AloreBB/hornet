@@ -6,7 +6,7 @@
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/hornet.json"
+CONFIG_FILE="$SCRIPT_DIR/config.json"
 ENV_FILE="$SCRIPT_DIR/.hornet.env"
 MONITOR="$SCRIPT_DIR/hornet.sh"
 
@@ -34,7 +34,7 @@ fi
 # ── jq helpers ────────────────────────────────────────────
 require_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        err "hornet.json not found. Run: hornet init"
+        err "config.json not found. Run: hornet init"
         exit 1
     fi
 }
