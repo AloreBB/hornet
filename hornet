@@ -439,7 +439,10 @@ cmd_update() {
 
     info "Checking for updates..."
     local remote_version
-    remote_version=$(curl -fsSL --max-time 10 "$version_url" 2>/dev/null | tr -d '[:space:]') || {
+    remote_version=$(curl -fsSL --max-time 10 \
+        -H "Cache-Control: no-cache" \
+        -H "Pragma: no-cache" \
+        "$version_url" 2>/dev/null | tr -d '[:space:]') || {
         err "Could not reach GitHub. Check your connection."
         exit 1
     }
