@@ -526,6 +526,11 @@ case "${1:-}" in
     update)    cmd_update ;;
     whitelist) cmd_whitelist "${@:2}" ;;
     uninstall) cmd_uninstall ;;
+    version|--version|-v|-V)
+        local_version="unknown"
+        [[ -f "$SCRIPT_DIR/VERSION" ]] && local_version=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
+        echo "hornet v${local_version}"
+        ;;
     help|--help|-h) cmd_help ;;
     *) cmd_help ;;
 esac
