@@ -12,7 +12,7 @@ BASE_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 INSTALL_DIR="${HORNET_DIR:-$HOME/.hornet}"
 BIN_DIR="${HORNET_BIN:-$HOME/.local/bin}"
 
-RED='\033[38;5;161m'; GREEN='\033[38;5;222m'; CYAN='\033[38;5;147m'; BOLD='\033[1m'; RESET='\033[0m'
+RED='\033[38;2;182;89;94m'; GREEN='\033[38;2;226;212;177m'; CYAN='\033[38;2;176;150;189m'; BOLD='\033[1m'; RESET='\033[0m'
 
 err()  { echo -e "${RED}✖ $*${RESET}" >&2; exit 1; }
 ok()   { echo -e "${GREEN}✔ $*${RESET}"; }
