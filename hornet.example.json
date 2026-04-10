@@ -1,0 +1,18 @@
+{
+  "notifications": {
+    "url": "https://ntfy.sh",
+    "topic": "my-hornet-alerts",
+    "icon": ""
+  },
+  "baseline": {
+    "users": ["root:/bin/bash", "youruser:/bin/bash"],
+    "ssh_keys": ["/home/youruser/.ssh/authorized_keys:1"],
+    "crontabs": ["youruser:HASH_HERE"]
+  },
+  "whitelist": {
+    "ports": [22, 80, 443],
+    "processes": [],
+    "containers": [],
+    "extensions": ["so", "py", "sh"]
+  }
+}

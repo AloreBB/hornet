@@ -1,0 +1,381 @@
+#!/bin/bash
+# ============================================================
+# 🕸️ HORNET CLI
+# ============================================================
+
+set -eo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/hornet.json"
+ENV_FILE="$SCRIPT_DIR/.hornet.env"
+MONITOR="$SCRIPT_DIR/hornet.sh"
+
+# ── Colors ────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
+BOLD='\033[1m'; RESET='\033[0m'
+
+err()  { gum log --level error "$*" 2>/dev/null || echo -e "${RED}✖ $*${RESET}" >&2; }
+ok()   { gum log --level info  "$*" 2>/dev/null || echo -e "${GREEN}✔ $*${RESET}"; }
+info() { gum log --level debug "$*" 2>/dev/null || echo -e "${CYAN}→ $*${RESET}"; }
+
+# ── Dependency check ──────────────────────────────────────
+if ! command -v gum &>/dev/null; then
+    echo -e "${RED}✖ gum is required but not installed.${RESET}"
+    echo -e "  Run: ${CYAN}curl -fsSL https://raw.githubusercontent.com/AloreBB/hornet/main/install.sh | bash${RESET}"
+    echo -e "  Or:  ${CYAN}https://github.com/charmbracelet/gum#installation${RESET}"
+    exit 1
+fi
+if ! command -v jq &>/dev/null; then
+    echo -e "${RED}✖ jq is required but not installed.${RESET}"
+    echo -e "  Install with: ${CYAN}sudo apt install jq${RESET}"
+    exit 1
+fi
+
+# ── jq helpers ────────────────────────────────────────────
+require_config() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        err "hornet.json not found. Run: hornet init"
+        exit 1
+    fi
+}
+
+jq_get()    { jq -r "$1" "$CONFIG_FILE"; }
+jq_update() { local tmp; tmp=$(jq "$1" "$CONFIG_FILE") && echo "$tmp" > "$CONFIG_FILE"; }
+
+# ── UI helpers ────────────────────────────────────────────
+header() {
+    gum style \
+        --border rounded --border-foreground 240 \
+        --padding "0 2" --margin "1 0" \
+        "$1"
+}
+
+prompt_input()    { gum input --prompt "  ${1}: " --placeholder "${2:-}" --value "${3:-}"; }
+prompt_password() { gum input --prompt "  ${1}: " --placeholder "tk_..." --password; }
+prompt_choose()   { local h="$1"; shift; gum choose --header "  $h" --cursor "❯ " --cursor.foreground 212 --selected.foreground 212 "$@"; }
+prompt_confirm()  { gum confirm --affirmative "Yes" --negative "No" "  $1"; }
+
+prompt_filter() {
+    # Fuzzy-pick from a list. Usage: prompt_filter "placeholder" item1 item2 ...
+    local placeholder="$1"; shift
+    printf '%s\n' "$@" | gum filter --placeholder "$placeholder" --no-limit=false
+}
+
+# ── Commands ──────────────────────────────────────────────
+
+cmd_run() {
+    require_config
+    echo
+    gum spin --spinner dot --title " Running Hornet scan..." -- bash "$MONITOR"
+    ok "Scan complete — run 'hornet status' to see results."
+    echo
+}
+
+cmd_init() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        err "hornet.json already exists. Use 'hornet setup' to configure it."
+        exit 1
+    fi
+    cat > "$CONFIG_FILE" <<'EOF'
+{
+  "notifications": {
+    "url": "",
+    "topic": "",
+    "icon": ""
+  },
+  "baseline": {
+    "users": [],
+    "ssh_keys": [],
+    "crontabs": []
+  },
+  "whitelist": {
+    "ports": [22, 80, 443],
+    "processes": [],
+    "containers": [],
+    "extensions": ["so", "py", "sh"]
+  }
+}
+EOF
+    chmod 600 "$CONFIG_FILE"
+    ok "Created hornet.json"
+    echo
+    if prompt_confirm "Set up ntfy notifications now?"; then
+        _setup_ntfy
+    fi
+}
+
+cmd_setup() {
+    require_config
+    echo
+    header "🕸️  HORNET — Setup"
+    local section
+    section=$(prompt_choose "What do you want to configure?" \
+        "🔔  Notifications (ntfy)" \
+        "🔌  Whitelist — ports" \
+        "⚙️   Whitelist — processes" \
+        "🐳  Whitelist — containers" \
+        "📄  Whitelist — file extensions" \
+        "✖   Exit")
+    echo
+    case "$section" in
+        *"Notifications"*)  _setup_ntfy ;;
+        *"ports"*)          _setup_whitelist_interactive "ports" "port" ;;
+        *"processes"*)      _setup_whitelist_interactive "processes" "process" ;;
+        *"containers"*)     _setup_whitelist_interactive "containers" "container" ;;
+        *"extensions"*)     _setup_whitelist_interactive "extensions" "ext" ;;
+        *"Exit"*) exit 0 ;;
+    esac
+}
+
+_setup_ntfy() {
+    header "🔔  Notifications — ntfy"
+
+    local current_url current_topic current_icon
+    current_url=$(jq_get   '.notifications.url   // ""')
+    current_topic=$(jq_get '.notifications.topic // ""')
+    current_icon=$(jq_get  '.notifications.icon  // ""')
+
+    local url topic icon token
+    url=$(prompt_input   "ntfy server URL"        "https://ntfy.sh"  "$current_url")
+    topic=$(prompt_input "Topic / channel"         "my-alerts"        "$current_topic")
+    icon=$(prompt_input  "Icon URL (optional)"     ""                 "$current_icon")
+    token=$(prompt_password "Access token (blank = public ntfy)")
+
+    jq_update \
+        ".notifications.url   = \"$url\"   |
+         .notifications.topic = \"$topic\" |
+         .notifications.icon  = \"$icon\""
+
+    if [[ -n "$token" ]]; then
+        printf '# Hornet secrets — never commit this file\nNTFY_TOKEN=%s\n' "$token" > "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+        ok "Token saved to .hornet.env"
+    elif [[ ! -f "$ENV_FILE" ]]; then
+        printf '# Hornet secrets — never commit this file\nNTFY_TOKEN=\n' > "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+    fi
+
+    ok "Notifications configured."
+    echo
+    if prompt_confirm "Send a test notification now?"; then
+        local test_token=""
+        [[ -f "$ENV_FILE" ]] && test_token=$(grep '^NTFY_TOKEN=' "$ENV_FILE" | cut -d= -f2- || true)
+        gum spin --spinner dot --title " Sending test notification..." -- \
+            curl -sf --max-time 10 \
+                ${test_token:+-H "Authorization: Bearer $test_token"} \
+                -H "Title: 🕸️ Hornet — Test" \
+                -H "Priority: default" \
+                -H "Tags: white_check_mark" \
+                -d "Hornet is configured and watching. Hallownest will not fall." \
+                "$url/$topic" \
+            && ok "Test sent to $url/$topic" \
+            || err "Failed to send. Check your URL and token."
+    fi
+    echo
+}
+
+_setup_whitelist_interactive() {
+    local json_key="$1" type="$2"
+
+    # Show current values in a table
+    local items
+    items=$(jq_get ".whitelist.${json_key}[]" 2>/dev/null || true)
+
+    header "Whitelist — $json_key"
+
+    if [[ -n "$items" ]]; then
+        { echo "Value"; echo "$items"; } | gum table --border rounded --border.foreground 240
+    else
+        gum style --foreground 240 --italic "  (empty)"
+    fi
+    echo
+
+    local action
+    action=$(prompt_choose "Action:" "Add" "Remove" "Back")
+    case "$action" in
+        "Add")
+            local val
+            val=$(prompt_input "Value to add" "" "")
+            [[ -z "$val" ]] && return
+            whitelist_add "$type" "$val"
+            ;;
+        "Remove")
+            [[ -z "$items" ]] && { info "Nothing to remove."; return; }
+            local val
+            val=$(prompt_filter "Search to remove..." $items)
+            [[ -z "$val" ]] && return
+            whitelist_remove "$type" "$val"
+            ;;
+        "Back") return ;;
+    esac
+}
+
+cmd_status() {
+    local log="$SCRIPT_DIR/hornet.log"
+    if [[ ! -f "$log" ]]; then
+        err "No log file found at $log"
+        exit 1
+    fi
+
+    echo
+    header "🕸️  HORNET — Recent scans"
+
+    # Build table data: Date | Time | Status
+    {
+        echo "Date,Time,Status"
+        tail -20 "$log" | while IFS= read -r line; do
+            local date time issues
+            date=$(echo "$line"  | grep -oP '^\[\K[0-9-]+')
+            time=$(echo "$line"  | grep -oP '[0-9]{2}:[0-9]{2}:[0-9]{2}')
+            issues=$(echo "$line" | grep -oP 'Issues: \K.*')
+            echo "${date},${time},${issues}"
+        done
+    } | gum table --border rounded --border.foreground 240 \
+        --widths 12,10,50
+    echo
+}
+
+cmd_whitelist() {
+    require_config
+    local subcmd="${1:-}"
+    case "$subcmd" in
+        list)    whitelist_list ;;
+        add)     whitelist_add "${@:2}" ;;
+        remove)  whitelist_remove "${@:2}" ;;
+        "")
+            echo
+            header "🕸️  HORNET — Whitelist"
+            local section
+            section=$(prompt_choose "Which whitelist?" \
+                "🔌  Ports" "⚙️   Processes" "🐳  Containers" "📄  Extensions" "Back")
+            echo
+            case "$section" in
+                *"Ports"*)      _setup_whitelist_interactive "ports" "port" ;;
+                *"Processes"*)  _setup_whitelist_interactive "processes" "process" ;;
+                *"Containers"*) _setup_whitelist_interactive "containers" "container" ;;
+                *"Extensions"*) _setup_whitelist_interactive "extensions" "ext" ;;
+                "Back") return ;;
+            esac
+            ;;
+        *)
+            err "Unknown subcommand: $subcmd"
+            echo "Usage: hornet whitelist <list|add|remove> <type> [value]"
+            exit 1
+            ;;
+    esac
+}
+
+whitelist_list() {
+    echo
+    header "🕸️  HORNET — Whitelists"
+    {
+        echo "Type,Value"
+        jq_get '.whitelist.ports[]'      2>/dev/null | while read -r v; do echo "port,$v"; done     || true
+        jq_get '.whitelist.processes[]'  2>/dev/null | while read -r v; do echo "process,$v"; done  || true
+        jq_get '.whitelist.containers[]' 2>/dev/null | while read -r v; do echo "container,$v"; done || true
+        jq_get '.whitelist.extensions[]' 2>/dev/null | while read -r v; do echo "ext,.$v"; done      || true
+    } | gum table --border rounded --border.foreground 240 --widths 12,30
+    echo
+}
+
+whitelist_add() {
+    local type="${1:-}" value="${2:-}"
+    if [[ -z "$type" || -z "$value" ]]; then
+        err "Usage: hornet whitelist add <port|process|container|ext> <value>"
+        exit 1
+    fi
+    case "$type" in
+        port)
+            [[ "$value" =~ ^[0-9]+$ ]] || { err "Port must be a number."; exit 1; }
+            jq_get '.whitelist.ports[]' | grep -qx "$value" && { info "Port $value is already whitelisted."; exit 0; }
+            jq_update ".whitelist.ports += [$value] | .whitelist.ports |= sort"
+            ok "Added port $value to whitelist."
+            ;;
+        process|proc)
+            jq_get '.whitelist.processes[]' | grep -qx "$value" && { info "Process '$value' is already whitelisted."; exit 0; }
+            jq_update ".whitelist.processes += [\"$value\"]"
+            ok "Added process '$value' to whitelist."
+            ;;
+        container)
+            jq_get '.whitelist.containers[]' | grep -qx "$value" && { info "Container '$value' is already whitelisted."; exit 0; }
+            jq_update ".whitelist.containers += [\"$value\"]"
+            ok "Added container '$value' to whitelist."
+            ;;
+        ext|extension)
+            value="${value#.}"
+            jq_get '.whitelist.extensions[]' | grep -qx "$value" && { info "Extension '.$value' is already whitelisted."; exit 0; }
+            jq_update ".whitelist.extensions += [\"$value\"]"
+            ok "Added extension '.$value' to whitelist."
+            ;;
+        *) err "Unknown type: $type. Valid: port, process, container, ext"; exit 1 ;;
+    esac
+}
+
+whitelist_remove() {
+    local type="${1:-}" value="${2:-}"
+    if [[ -z "$type" || -z "$value" ]]; then
+        err "Usage: hornet whitelist remove <port|process|container|ext> <value>"
+        exit 1
+    fi
+    case "$type" in
+        port)
+            jq_update ".whitelist.ports -= [$value]"
+            ok "Removed port $value from whitelist."
+            ;;
+        process|proc)
+            jq_update ".whitelist.processes -= [\"$value\"]"
+            ok "Removed process '$value' from whitelist."
+            ;;
+        container)
+            jq_update ".whitelist.containers -= [\"$value\"]"
+            ok "Removed container '$value' from whitelist."
+            ;;
+        ext|extension)
+            value="${value#.}"
+            jq_update ".whitelist.extensions -= [\"$value\"]"
+            ok "Removed extension '.$value' from whitelist."
+            ;;
+        *) err "Unknown type: $type. Valid: port, process, container, ext"; exit 1 ;;
+    esac
+}
+
+cmd_help() {
+    header "🕸️  HORNET — Server Security Monitor"
+    gum format -- \
+"**Usage:** hornet <command> [options]
+
+**Commands:**
+- \`run\`                          Run a security scan now
+- \`status\`                       Show recent scan history
+- \`setup\`                        Interactive configuration wizard
+- \`init\`                         Create a fresh hornet.json
+- \`whitelist\`                    Interactive whitelist manager
+- \`whitelist list\`               Show all whitelisted values
+- \`whitelist add <type> <val>\`   Add to whitelist
+- \`whitelist remove <type> <val>\` Remove from whitelist
+
+**Whitelist types:**
+- \`port\`       Open port that should not trigger alerts (e.g. 25565)
+- \`process\`    Process name to ignore in high-CPU check (e.g. java)
+- \`container\`  Docker container to skip in /tmp binary check
+- \`ext\`        File extension to ignore in /tmp checks (e.g. so)
+
+**Config files:**
+- \`hornet.json\`   Main config — whitelists and ntfy URL/topic/icon
+- \`.hornet.env\`   Secrets only (ntfy token) — **never commit this file**
+
+**Notifications:** Hornet sends alerts via ntfy (self-hosted or ntfy.sh).
+Run \`hornet setup\` to configure, or edit \`hornet.json\` directly."
+    echo
+}
+
+# ── Entrypoint ────────────────────────────────────────────
+case "${1:-}" in
+    run)       cmd_run ;;
+    init)      cmd_init ;;
+    setup)     cmd_setup ;;
+    status)    cmd_status ;;
+    whitelist) cmd_whitelist "${@:2}" ;;
+    help|--help|-h) cmd_help ;;
+    *) cmd_help ;;
+esac
