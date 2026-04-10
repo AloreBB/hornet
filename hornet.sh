@@ -22,6 +22,8 @@ if [[ -z "${NTFY_TOKEN:-}" ]]; then
         source "$SCRIPT_DIR/.hornet.env"
     fi
 fi
+# Always define NTFY_TOKEN (even empty) to avoid nounset errors
+NTFY_TOKEN="${NTFY_TOKEN:-}"
 
 # --- Load JSON config ---
 if [[ ! -f "$CONFIG_FILE" ]]; then
