@@ -107,7 +107,32 @@ EOF
 }
 
 cmd_setup() {
-    require_config
+    # Auto-create config if missing so setup works on fresh install
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        cat > "$CONFIG_FILE" <<'EOF'
+{
+  "notifications": {
+    "url": "https://ntfy.sh",
+    "topic": "my-hornet-alerts",
+    "icon": ""
+  },
+  "baseline": {
+    "users": [],
+    "ssh_keys": [],
+    "crontabs": []
+  },
+  "whitelist": {
+    "ports": [22, 80, 443],
+    "processes": [],
+    "containers": [],
+    "extensions": ["so", "py", "sh"]
+  }
+}
+EOF
+        chmod 600 "$CONFIG_FILE"
+        ok "Created config.json"
+    fi
+
     echo
     header "🕸️  HORNET — Setup"
     local section
@@ -117,7 +142,7 @@ cmd_setup() {
         "⚙️   Whitelist — processes" \
         "🐳  Whitelist — containers" \
         "📄  Whitelist — file extensions" \
-        "✖   Exit")
+        "✖   Exit") || true
     echo
     case "$section" in
         *"Notifications"*)  _setup_ntfy ;;
@@ -125,7 +150,7 @@ cmd_setup() {
         *"processes"*)      _setup_whitelist_interactive "processes" "process" ;;
         *"containers"*)     _setup_whitelist_interactive "containers" "container" ;;
         *"extensions"*)     _setup_whitelist_interactive "extensions" "ext" ;;
-        *"Exit"*) exit 0 ;;
+        *"Exit"*|"") exit 0 ;;
     esac
 }
 
