@@ -71,8 +71,20 @@ prompt_filter() {
 cmd_run() {
     require_config
     echo
-    gum spin --spinner dot --title " Running Hornet scan..." -- bash "$MONITOR"
-    ok "Scan complete — run 'hornet status' to see results."
+    local output
+    output=$(gum spin --spinner dot --title " Running Hornet scan..." --show-output -- bash "$MONITOR" 2>/dev/null || true)
+    echo
+    if echo "$output" | grep -q "HORNET_CLEAN"; then
+        gum style \
+            --border rounded --border-foreground '#553b4f' \
+            --padding "1 3" --margin "0 1" \
+            "$(gum style --bold --foreground '#e2d4b1' "Hallownest está protegido.")" \
+            "" \
+            "$(gum style --foreground '#b096bd' "He recorrido cada rincón. No hay amenaza.")" \
+            "$(gum style --foreground '#b096bd' "Los hilos resisten. El reino permanece en calma.")"
+    else
+        ok "Scan complete — run 'hornet status' to see results."
+    fi
     echo
 }
 
