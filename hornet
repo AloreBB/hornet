@@ -217,13 +217,23 @@ _setup_whitelist_interactive() {
 
 cmd_status() {
     local log="$SCRIPT_DIR/hornet.log"
-    if [[ ! -f "$log" ]]; then
-        err "No log file found at $log"
-        exit 1
-    fi
-
     echo
     header "🕸️  HORNET — Recent scans"
+
+    if [[ ! -f "$log" ]]; then
+        gum style --foreground 240 --italic "  No scans yet. Run 'hornet run' to start."
+        echo
+        return
+    fi
+
+    local entries
+    entries=$(tail -20 "$log" | grep -c 'Hornet scan complete' 2>/dev/null || echo 0)
+
+    if [[ "$entries" -eq 0 ]]; then
+        gum style --foreground 240 --italic "  No scans recorded in the log yet."
+        echo
+        return
+    fi
 
     # Build table data: Date | Time | Status
     {
