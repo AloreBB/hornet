@@ -25,7 +25,13 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 if [[ "$OS" != "Linux" ]]; then
-    err "Hornet currently supports Linux only."
+    err "Hornet only runs on Linux servers."
+    echo
+    echo "  Hornet monitors server-specific tools (Docker, fail2ban, ss, /proc)"
+    echo "  that are not available on macOS or Windows."
+    echo
+    echo "  Deploy it on your Linux VPS and connect from your Mac via SSH."
+    exit 1
 fi
 
 # ── 2. Install dependencies ───────────────────────────────
