@@ -58,7 +58,7 @@ header() {
 prompt_input()    { gum input --prompt "  ${1}: " --placeholder "${2:-}" --value "${3:-}" --prompt.foreground '#b096bd'; }
 prompt_password() { gum input --prompt "  ${1}: " --placeholder "tk_..." --password --prompt.foreground '#b096bd'; }
 prompt_choose()   { local h="$1"; shift; gum choose --header "  $h" --cursor "❯ " --cursor.foreground '#b6595e' --selected.foreground '#b96f78' "$@"; }
-prompt_confirm()  { gum confirm --affirmative "Yes" --negative "No" --affirmative.foreground '#e2d4b1' --negative.foreground '#b6595e' "  $1"; }
+prompt_confirm()  { gum confirm --affirmative "Yes" --negative "No" --selected.foreground '#e2d4b1' --unselected.foreground '#b096bd' "  $1"; }
 
 prompt_filter() {
     # Fuzzy-pick from a list. Usage: prompt_filter "placeholder" item1 item2 ...
