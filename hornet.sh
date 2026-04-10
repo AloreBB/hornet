@@ -485,8 +485,3 @@ elif [[ -n "$RECOVERED" ]]; then
 fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hornet scan complete. Issues: ${CURRENT_ISSUES:-none}"
-
-# Print clean status for interactive runs (captured by hornet run)
-if [[ -z "$CURRENT_ISSUES" && -z "$RECOVERED" ]]; then
-    echo "HORNET_CLEAN"
-fi

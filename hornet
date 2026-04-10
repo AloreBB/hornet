@@ -70,11 +70,13 @@ prompt_filter() {
 
 cmd_run() {
     require_config
+    local log="$SCRIPT_DIR/hornet.log"
     echo
-    local output
-    output=$(gum spin --spinner dot --title " Running Hornet scan..." --show-output -- bash "$MONITOR" 2>/dev/null || true)
+    gum spin --spinner dot --title " Running Hornet scan..." -- \
+        bash -c "bash '$MONITOR' >> '$log' 2>&1" || true
     echo
-    if echo "$output" | grep -q "HORNET_CLEAN"; then
+
+    if [[ -f "$log" ]] && tail -1 "$log" 2>/dev/null | grep -q "Issues: none"; then
         gum style \
             --border rounded --border-foreground '#553b4f' \
             --padding "1 3" --margin "0 1" \
