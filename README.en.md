@@ -1,4 +1,4 @@
-# <img src="https://raw.githubusercontent.com/AloreBB/hornet/main/static/hornet-head.png" width="40" alt="Hornet" valign="middle" /> Hornet
+# <img src="https://raw.githubusercontent.com/AloreBB/hornet/main/static/hornet-head.png" width="40" alt="Hornet" style="vertical-align: middle" /> Hornet
 
 [🇪🇸 Español](README.md)
 
