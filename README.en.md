@@ -1,12 +1,10 @@
-# 🕸️ Hornet
+# <img src="https://raw.githubusercontent.com/AloreBB/hornet/main/static/hornet-head.png" width="24" alt="Hornet" valign="middle" /> Hornet
 
 [🇪🇸 Español](README.md)
 
 > *Hornet watches. Hallownest will not fall.*
 
 Lightweight Linux server security monitor. Runs every 15 minutes, detects threats, and sends push alerts via [ntfy](https://ntfy.sh).
-
-<img src="https://raw.githubusercontent.com/AloreBB/hornet/main/static/hornet-head.png" width="120" alt="Hornet" />
 
 ## What it detects
 
