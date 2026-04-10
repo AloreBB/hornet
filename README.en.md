@@ -6,7 +6,7 @@
 
 Lightweight Linux server security monitor. Runs every 15 minutes, detects threats, and sends push alerts via [ntfy](https://ntfy.sh).
 
-![Hornet CLI](https://raw.githubusercontent.com/AloreBB/hornet/main/static/hornet-head.png)
+<img src="https://raw.githubusercontent.com/AloreBB/hornet/main/static/hornet-head.png" width="120" alt="Hornet" />
 
 ## What it detects
 
