@@ -519,7 +519,12 @@ cmd_uninstall() {
 
     echo
     gum style --foreground 240 --italic "  Hallownest falls silent."
-    gum style --foreground 240 "  Open a new terminal session to complete the removal."
+    echo
+    gum style --foreground '#b096bd' \
+        "  Run the following to remove hornet from your current session:" \
+        "" \
+        "    hash -r        # bash" \
+        "    rehash         # zsh"
     echo
 }
 
