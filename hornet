@@ -484,12 +484,15 @@ cmd_update() {
 }
 
 cmd_uninstall() {
+    local bin_dir="${HORNET_BIN:-$HOME/.local/bin}"
+    local dir="${HORNET_DIR:-$HOME/.hornet}"
+
     echo
     header "🕸️  HORNET — Uninstall"
     echo
     gum style --foreground 240 "  This will remove:"
-    echo "    • $INSTALL_DIR  (Hornet files + config)"
-    echo "    • $BIN_DIR/hornet  (CLI symlink)"
+    echo "    • $dir"
+    echo "    • $bin_dir/hornet"
     echo "    • Cron job (if installed)"
     echo
 
@@ -504,12 +507,11 @@ cmd_uninstall() {
         ok "Cron job removed."
     fi
 
-    # Remove symlink
-    local bin="${HORNET_BIN:-$HOME/.local/bin}/hornet"
-    [[ -L "$bin" ]] && rm -f "$bin" && ok "Symlink removed."
+    # Remove CLI binaries from bin dir (symlinks or files)
+    rm -f "$bin_dir/hornet" "$bin_dir/hornet.sh"
+    ok "CLI removed from $bin_dir."
 
     # Remove install dir
-    local dir="${HORNET_DIR:-$HOME/.hornet}"
     if [[ -d "$dir" ]]; then
         rm -rf "$dir"
         ok "Hornet files removed."
@@ -517,6 +519,7 @@ cmd_uninstall() {
 
     echo
     gum style --foreground 240 --italic "  Hallownest falls silent."
+    gum style --foreground 240 "  Open a new terminal session to complete the removal."
     echo
 }
 
