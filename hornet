@@ -476,6 +476,9 @@ cmd_update() {
     mv "$SCRIPT_DIR/VERSION.tmp"   "$SCRIPT_DIR/VERSION"
     chmod +x "$SCRIPT_DIR/monitor.sh" "$SCRIPT_DIR/hornet"
 
+    # Remove legacy hornet.sh if it exists (renamed to monitor.sh in v1.2.0)
+    [[ -f "$SCRIPT_DIR/hornet.sh" ]] && rm -f "$SCRIPT_DIR/hornet.sh"
+
     ok "Updated to v${remote_version}. Your config.json is untouched."
     echo
 }
