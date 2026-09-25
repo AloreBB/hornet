@@ -479,6 +479,13 @@ cmd_update() {
     # Remove legacy hornet.sh if it exists (renamed to monitor.sh in v1.2.0)
     [[ -f "$SCRIPT_DIR/hornet.sh" ]] && rm -f "$SCRIPT_DIR/hornet.sh"
 
+    # Migrate crontab lines still pointing at hornet.sh (every cron run
+    # since v1.2.0 failed with "hornet.sh: not found")
+    if crontab -l 2>/dev/null | grep -qF "$SCRIPT_DIR/hornet.sh"; then
+        (crontab -l 2>/dev/null | sed "s|$SCRIPT_DIR/hornet.sh|$SCRIPT_DIR/monitor.sh|g") | crontab -
+        ok "Crontab migrated from hornet.sh to monitor.sh."
+    fi
+
     ok "Updated to v${remote_version}. Your config.json is untouched."
     echo
 }
