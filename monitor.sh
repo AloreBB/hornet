@@ -6,31 +6,31 @@
 
 set -uo pipefail
 
+export TZ=America/Bogota
+
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
-STATE_FILE="/tmp/.hornet-state"
+STATE_FILE="${HORNET_STATE_FILE:-/tmp/.hornet-state}"
+TELEGRAM_API_BASE="${TELEGRAM_API_BASE:-https://api.telegram.org}"
 HOSTNAME=$(hostname)
 NOW=$(date '+%Y-%m-%d %H:%M')
 
 # --- Load credentials ---
 # Priority: 1) already set in environment, 2) ~/.config/hornet/credentials, 3) legacy .hornet.env
 CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hornet/credentials"
-if [[ -z "${NTFY_TOKEN:-}" || -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-    # Remember exported values so the environment always wins over the files
-    _ENV_NTFY_TOKEN="${NTFY_TOKEN:-}"
-    _ENV_TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
-    if [[ -f "$CREDENTIALS_FILE" ]]; then
-        source "$CREDENTIALS_FILE"
-    elif [[ -f "$SCRIPT_DIR/.hornet.env" ]]; then
-        source "$SCRIPT_DIR/.hornet.env"
-    fi
-    [[ -n "$_ENV_NTFY_TOKEN" ]] && NTFY_TOKEN="$_ENV_NTFY_TOKEN"
-    [[ -n "$_ENV_TELEGRAM_BOT_TOKEN" ]] && TELEGRAM_BOT_TOKEN="$_ENV_TELEGRAM_BOT_TOKEN"
-    unset _ENV_NTFY_TOKEN _ENV_TELEGRAM_BOT_TOKEN
+CREDENTIAL_VARS="NTFY_TOKEN TELEGRAM_BOT_TOKEN AI_API_KEY"
+declare -A _ENV_CREDS=()
+for _var in $CREDENTIAL_VARS; do _ENV_CREDS[$_var]="${!_var:-}"; done
+if [[ -f "$CREDENTIALS_FILE" ]]; then
+    source "$CREDENTIALS_FILE"
+elif [[ -f "$SCRIPT_DIR/.hornet.env" ]]; then
+    source "$SCRIPT_DIR/.hornet.env"
 fi
-# Always define tokens (even empty) to avoid nounset errors
-NTFY_TOKEN="${NTFY_TOKEN:-}"
-TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+for _var in $CREDENTIAL_VARS; do
+    [[ -n "${_ENV_CREDS[$_var]}" ]] && printf -v "$_var" '%s' "${_ENV_CREDS[$_var]}"
+    printf -v "$_var" '%s' "${!_var:-}"   # always defined (nounset)
+done
+unset _var _ENV_CREDS
 
 # --- Load JSON config ---
 if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -44,6 +44,8 @@ NTFY_URL=$(_jq '.notifications.url // ""')
 NTFY_TOPIC=$(_jq '.notifications.topic // ""')
 NTFY_ICON=$(_jq '.notifications.icon // ""')
 TELEGRAM_CHAT_ID=$(_jq '.notifications.telegram_chat_id // ""')
+AI_EXPLAIN=$(_jq '.ai.explain_alerts // false')
+HEALTHCHECK_URL=$(_jq '.healthcheck_url // ""')
 
 # Baseline values
 BASELINE_USERS=$(_jq '.baseline.users | join(" ")')
@@ -69,6 +71,9 @@ save_state() {
     echo "$1" > "$STATE_FILE"
 }
 
+log_error() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR $*" >&2; }
+DELIVERY_FAILED=0
+
 # --- Escape text for Telegram HTML parse mode ---
 html_escape() {
     local s="$1"
@@ -87,6 +92,7 @@ send_telegram() {
         alert)     emoji="🚨" ;;
         warning)   emoji="⚠️" ;;
         recovered) emoji="✅" ;;
+        info)      emoji="🔑" ;;
         *)         emoji="🕸️" ;;
     esac
     # Telegram caps messages at 4096 chars: truncate before escaping
@@ -105,7 +111,7 @@ $(html_escape "$message")"
         --data-urlencode "parse_mode=HTML" \
         --data-urlencode "disable_web_page_preview=true" \
         --data-urlencode "text=${text}" \
-        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        "${TELEGRAM_API_BASE}/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
         -o "$tmpfile" -w '%{http_code}' 2>"$errfile")
     curl_rc=$?
     if [[ "$curl_rc" -ne 0 ]]; then
@@ -134,6 +140,7 @@ send_ntfy() {
         alert)     priority="urgent";  tags="rotating_light,skull" ;;
         warning)   priority="high";    tags="warning" ;;
         recovered) priority="default"; tags="white_check_mark,shield" ;;
+        info)      priority="default"; tags="key" ;;
         *)         priority="default"; tags="" ;;
     esac
     local auth_args=()
@@ -174,6 +181,7 @@ notify() {
     [[ -n "$NTFY_URL" && -n "$NTFY_TOPIC" ]] && ntfy_on=true
     if ! $telegram_on && ! $ntfy_on; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: no notification channel configured (set telegram_chat_id + TELEGRAM_BOT_TOKEN, or ntfy url + topic) — alert NOT sent" >&2
+        DELIVERY_FAILED=1
         return 1
     fi
     local delivered=0
@@ -186,7 +194,59 @@ notify() {
     if [[ "$delivered" -eq 1 ]]; then
         return 0
     fi
+    DELIVERY_FAILED=1
     return 1
+}
+
+# --- AI analysis for alerts (never blocks delivery) ---
+# Usage: explain_alert level title message. Prints the analysis or nothing.
+explain_alert() {
+    [[ "$AI_EXPLAIN" == "true" && -n "$AI_API_KEY" ]] || return 0
+    if ! command -v python3 &>/dev/null; then
+        log_error "explain: python3 not found"
+        return 0
+    fi
+    local input analysis rc
+    input=$(jq -nc --arg level "$1" --arg title "$2" --arg message "$3" \
+        '{level: $level, title: $title, message: $message}')
+    analysis=$(printf '%s' "$input" | AI_API_KEY="$AI_API_KEY" HORNET_DIR="$SCRIPT_DIR" \
+        timeout 35 python3 "$SCRIPT_DIR/ai/explain.py")
+    rc=$?
+    [[ "$rc" -eq 124 ]] && log_error "explain: timeout"
+    [[ "$rc" -eq 0 ]] && printf '%s' "$analysis"
+    return 0
+}
+
+# --- Alert history for the chat (last 500) ---
+record_alert() {
+    local file="$SCRIPT_DIR/alerts.jsonl"
+    jq -nc --arg ts "$(date --iso-8601=seconds)" --arg level "$1" --arg title "$2" \
+        --arg issues "$3" --arg message "$4" --arg analysis "$5" \
+        '{ts: $ts, level: $level, title: $title, issues: $issues, message: $message, analysis: $analysis}' >> "$file"
+    if [[ $(wc -l < "$file") -gt 500 ]]; then
+        tail -n 500 "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    fi
+}
+
+# --- Explain + notify + record ---
+# Usage: deliver level title message issues. Returns notify's status.
+deliver() {
+    local level="$1" title="$2" message="$3" issues="$4" analysis=""
+    if [[ "$level" == "alert" || "$level" == "warning" ]]; then
+        analysis=$(explain_alert "$level" "$title" "$message")
+    fi
+    local full="$message"
+    [[ -n "$analysis" ]] && full="${message}"$'\n\n'"🧠 Análisis (IA): ${analysis}"
+    notify "$level" "$title" "$full" || return 1
+    record_alert "$level" "$title" "$issues" "$message" "$analysis"
+}
+
+# --- External dead-man switch (healthchecks.io) ---
+healthcheck_ping() {
+    [[ -n "$HEALTHCHECK_URL" ]] || return 0
+    local url="$HEALTHCHECK_URL"
+    [[ "$1" == "fail" ]] && url="${url%/}/fail"
+    curl -fsS -m 10 --retry 2 -o /dev/null "$url" 2>/dev/null || log_error "healthcheck: ping failed"
 }
 
 # --- Test mode: send a test notification and exit ---
@@ -195,10 +255,58 @@ if [[ "${1:-}" == "--test" ]]; then
 
 Servidor: ${HOSTNAME} | ${NOW}"; then
         echo "Test notification sent."
+        if [[ "$AI_EXPLAIN" == "true" && -n "$AI_API_KEY" ]]; then
+            analysis=$(explain_alert warning "HORNET — Prueba" "MEMORIA — RAM al 91% (21Gi/23Gi). Prueba del análisis de Hornet.")
+            if [[ -n "$analysis" ]]; then echo "Análisis de prueba: $analysis"; else echo "Análisis de prueba: sin respuesta (revisa el log)"; fi
+        fi
         exit 0
     else
         exit 1
     fi
+fi
+
+# --- SSH login mode (called from ~/.ssh/rc): instant access alert ---
+if [[ "${1:-}" == "--ssh-login" ]]; then
+    read -r ssh_ip ssh_port _ <<< "${SSH_CONNECTION:-}"
+    [[ -z "${ssh_ip:-}" ]] && exit 0
+    ssh_user=$(id -un)
+    exec 9>"$SCRIPT_DIR/.ssh-login.lock"
+    flock -w 20 9 || exit 0
+    last_file="$SCRIPT_DIR/ssh-last-notified"
+    known_file="$SCRIPT_DIR/ssh-known-ips"
+    now_epoch=$(date +%s)
+    if [[ -f "$last_file" ]]; then
+        read -r last_ip last_epoch < "$last_file"
+        if [[ "${last_ip:-}" == "$ssh_ip" && $((now_epoch - ${last_epoch:-0})) -lt 600 ]]; then
+            exit 0
+        fi
+    fi
+    ssh_method="" ssh_key=""
+    if command -v python3 &>/dev/null; then
+        for _ in 1 2 3; do
+            info=$(python3 "$SCRIPT_DIR/ai/hornet_tools.py" ssh-lookup "$ssh_user" "$ssh_ip" "$ssh_port" 2>/dev/null) || break
+            ssh_method=$(jq -r '.method // empty' <<< "$info")
+            ssh_key=$(jq -r '.key // empty' <<< "$info")
+            [[ -n "$ssh_method" ]] && break
+            sleep 1
+        done
+    fi
+    ip_known=false
+    grep -qxF "$ssh_ip" "$known_file" 2>/dev/null && ip_known=true
+    case "$ssh_method" in
+        publickey) how="key ${ssh_key:-sin comentario}" ;;
+        password|keyboard-interactive*) how="con contraseña" ;;
+        *) how="método desconocido" ;;
+    esac
+    level="info"
+    if [[ "$how" == "con contraseña" || "$ip_known" == false ]]; then level="warning"; fi
+    where="IP conocida"; $ip_known || where="IP nueva"
+    if notify "$level" "HORNET — Acceso SSH" "${ssh_user} desde ${ssh_ip} (${where}) · ${how} · $(date '+%H:%M')
+Servidor: ${HOSTNAME}"; then
+        echo "$ssh_ip $now_epoch" > "$last_file"
+        $ip_known || echo "$ssh_ip" >> "$known_file"
+    fi
+    exit 0
 fi
 
 # ============================================================
@@ -505,6 +613,47 @@ check_suid() {
     fi
 }
 
+# --- 14. SSH logins by other users (events, not issues) ---
+check_ssh_logins() {
+    command -v python3 &>/dev/null || return 0
+    local cursor_file="$SCRIPT_DIR/ssh-scan.cursor" now cursor events owner lines
+    now=$(date '+%Y-%m-%dT%H:%M:%S.%6N%:z')
+    if [[ ! -f "$cursor_file" ]]; then
+        echo "$now" > "$cursor_file"
+        return 0
+    fi
+    cursor=$(cat "$cursor_file")
+    if ! events=$(python3 "$SCRIPT_DIR/ai/hornet_tools.py" ssh-since "$cursor"); then
+        log_error "ssh logins: no log source readable (auth.log / wtmp)"
+        return 0
+    fi
+    # Next cursor: the later of scan start and newest login seen, compared as epoch
+    # microseconds, so a login in the same second as the scan is never reported twice
+    local next="$now" next_us ts ts_us
+    next_us=$(date -d "$now" +%s%6N)
+    while IFS= read -r ts; do
+        [[ -z "$ts" ]] && continue
+        ts_us=$(date -d "$ts" +%s%6N 2>/dev/null) || continue
+        if (( ts_us > next_us )); then
+            next="$ts"
+            next_us="$ts_us"
+        fi
+    done < <(printf '%s\n' "$events" | jq -r 'select(type == "object") | .ts' 2>/dev/null)
+    owner=$(id -un)
+    lines=$(printf '%s\n' "$events" | jq -r --arg owner "$owner" \
+        'select(type == "object" and .user != $owner) | "   • \(.ts[11:16]) — \(.user) desde \(.ip) (\(.method))"' 2>/dev/null)
+    if [[ -z "$lines" ]]; then
+        echo "$next" > "$cursor_file"
+        return 0
+    fi
+    local message="Alguien cruzó la puerta de Hallownest y no eres tú.\n\n${lines}\n\nSi no reconoces estos accesos, revisa: last -i y /var/log/auth.log\n\nHornet vigila. Hallownest no caerá.\nServidor: ${HOSTNAME} | ${NOW}"
+    if notify alert "HORNET — Intruso en la puerta" "$(echo -e "$message")"; then
+        echo "$next" > "$cursor_file"
+    else
+        log_error "ssh logins: notification failed — cursor kept, will retry"
+    fi
+}
+
 # ============================================================
 # CHECK FOR RECOVERED ISSUES
 # ============================================================
@@ -547,19 +696,14 @@ check_recovered() {
 # RUN ALL CHECKS
 # ============================================================
 
-check_exposed_ports
-check_shady_processes
-check_container_tmp
-check_high_cpu
-check_ram
-check_disk
-check_fail2ban
-check_containers
-check_crontabs
-check_users_and_keys
-check_outbound
-check_new_ports
-check_suid
+ALL_CHECKS="check_exposed_ports check_shady_processes check_container_tmp check_high_cpu check_ram check_disk check_fail2ban check_containers check_crontabs check_users_and_keys check_outbound check_new_ports check_suid check_ssh_logins"
+for check in ${HORNET_CHECKS:-$ALL_CHECKS}; do
+    if [[ " $ALL_CHECKS " == *" $check "* ]]; then
+        "$check"
+    else
+        log_error "unknown check in HORNET_CHECKS: $check"
+    fi
+done
 check_recovered
 
 # ============================================================
@@ -568,6 +712,7 @@ check_recovered
 
 # Nothing changed: log the heartbeat and exit without sending
 if [[ "$CURRENT_ISSUES" == "$PREVIOUS_STATE" && -z "$RECOVERED" ]]; then
+    if [[ "$DELIVERY_FAILED" -eq 1 ]]; then healthcheck_ping fail; else healthcheck_ping ok; fi
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hornet scan complete. Issues: ${CURRENT_ISSUES:-none}"
     exit 0
 fi
@@ -616,10 +761,11 @@ fi
 # previous state so the next run retries instead of losing the alert
 if [[ -z "$NOTIFY_LEVEL" ]]; then
     save_state "$CURRENT_ISSUES"
-elif notify "$NOTIFY_LEVEL" "$NOTIFY_TITLE" "$(echo -e "$MESSAGE")"; then
+elif deliver "$NOTIFY_LEVEL" "$NOTIFY_TITLE" "$(echo -e "$MESSAGE")" "$CURRENT_ISSUES"; then
     save_state "$CURRENT_ISSUES"
 else
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: notification failed — state NOT saved, will retry on next run" >&2
 fi
 
+if [[ "$DELIVERY_FAILED" -eq 1 ]]; then healthcheck_ping fail; else healthcheck_ping ok; fi
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hornet scan complete. Issues: ${CURRENT_ISSUES:-none}"
