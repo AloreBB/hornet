@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # 🕸️ HORNET — Guardiana de Hallownest
-# Server security monitor with push alerts via ntfy
+# Server security monitor with push alerts via Telegram and/or ntfy
 # ============================================================
 
 set -uo pipefail
@@ -12,18 +12,25 @@ STATE_FILE="/tmp/.hornet-state"
 HOSTNAME=$(hostname)
 NOW=$(date '+%Y-%m-%d %H:%M')
 
-# --- Load NTFY_TOKEN ---
+# --- Load credentials ---
 # Priority: 1) already set in environment, 2) ~/.config/hornet/credentials, 3) legacy .hornet.env
 CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hornet/credentials"
-if [[ -z "${NTFY_TOKEN:-}" ]]; then
+if [[ -z "${NTFY_TOKEN:-}" || -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+    # Remember exported values so the environment always wins over the files
+    _ENV_NTFY_TOKEN="${NTFY_TOKEN:-}"
+    _ENV_TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
     if [[ -f "$CREDENTIALS_FILE" ]]; then
         source "$CREDENTIALS_FILE"
     elif [[ -f "$SCRIPT_DIR/.hornet.env" ]]; then
         source "$SCRIPT_DIR/.hornet.env"
     fi
+    [[ -n "$_ENV_NTFY_TOKEN" ]] && NTFY_TOKEN="$_ENV_NTFY_TOKEN"
+    [[ -n "$_ENV_TELEGRAM_BOT_TOKEN" ]] && TELEGRAM_BOT_TOKEN="$_ENV_TELEGRAM_BOT_TOKEN"
+    unset _ENV_NTFY_TOKEN _ENV_TELEGRAM_BOT_TOKEN
 fi
-# Always define NTFY_TOKEN (even empty) to avoid nounset errors
+# Always define tokens (even empty) to avoid nounset errors
 NTFY_TOKEN="${NTFY_TOKEN:-}"
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 
 # --- Load JSON config ---
 if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -32,10 +39,11 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
 fi
 _jq() { jq -r "$1" "$CONFIG_FILE"; }
 
-# Notification settings (token comes from .hornet.env)
-NTFY_URL=$(_jq '.notifications.url')
-NTFY_TOPIC=$(_jq '.notifications.topic')
-NTFY_ICON=$(_jq '.notifications.icon')
+# Notification settings (tokens come from the environment or credentials file)
+NTFY_URL=$(_jq '.notifications.url // ""')
+NTFY_TOPIC=$(_jq '.notifications.topic // ""')
+NTFY_ICON=$(_jq '.notifications.icon // ""')
+TELEGRAM_CHAT_ID=$(_jq '.notifications.telegram_chat_id // ""')
 
 # Baseline values
 BASELINE_USERS=$(_jq '.baseline.users | join(" ")')
@@ -61,21 +69,137 @@ save_state() {
     echo "$1" > "$STATE_FILE"
 }
 
+# --- Escape text for Telegram HTML parse mode ---
+html_escape() {
+    local s="$1"
+    s="${s//&/&amp;}"
+    s="${s//</&lt;}"
+    s="${s//>/&gt;}"
+    printf '%s' "$s"
+}
+
+# --- Send push notification via Telegram ---
+# Usage: send_telegram level title message. Returns 0 on delivery.
+send_telegram() {
+    local level="$1" title="$2" message="$3"
+    local emoji
+    case "$level" in
+        alert)     emoji="🚨" ;;
+        warning)   emoji="⚠️" ;;
+        recovered) emoji="✅" ;;
+        *)         emoji="🕸️" ;;
+    esac
+    # Telegram caps messages at 4096 chars: truncate before escaping
+    if ((${#message} > 3500)); then
+        message="${message:0:3500}"$'\n…'
+    fi
+    local text
+    text="<b>$(html_escape "$emoji $title")</b>
+
+$(html_escape "$message")"
+    local tmpfile errfile http_code curl_rc
+    tmpfile=$(mktemp)
+    errfile=$(mktemp)
+    http_code=$(curl -sS --max-time 15 \
+        --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+        --data-urlencode "parse_mode=HTML" \
+        --data-urlencode "disable_web_page_preview=true" \
+        --data-urlencode "text=${text}" \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -o "$tmpfile" -w '%{http_code}' 2>"$errfile")
+    curl_rc=$?
+    if [[ "$curl_rc" -ne 0 ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR telegram: $(cat "$errfile")" >&2
+        rm -f "$tmpfile" "$errfile"
+        return 1
+    fi
+    if [[ "$http_code" != 2* ]]; then
+        local desc
+        desc=$(jq -r '.description // empty' "$tmpfile" 2>/dev/null || true)
+        [[ -z "$desc" ]] && desc="request failed"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR telegram: HTTP ${http_code} — ${desc}" >&2
+        rm -f "$tmpfile" "$errfile"
+        return 1
+    fi
+    rm -f "$tmpfile" "$errfile"
+    return 0
+}
+
 # --- Send push notification via ntfy ---
+# Usage: send_ntfy level title message. Returns 0 on delivery.
 send_ntfy() {
-    local title="$1"
-    local message="$2"
-    local priority="${3:-default}"
-    local tags="${4:-}"
-    curl -s --max-time 10 \
-        -H "Authorization: Bearer ${NTFY_TOKEN}" \
+    local level="$1" title="$2" message="$3"
+    local priority tags
+    case "$level" in
+        alert)     priority="urgent";  tags="rotating_light,skull" ;;
+        warning)   priority="high";    tags="warning" ;;
+        recovered) priority="default"; tags="white_check_mark,shield" ;;
+        *)         priority="default"; tags="" ;;
+    esac
+    local auth_args=()
+    [[ -n "$NTFY_TOKEN" ]] && auth_args=(-H "Authorization: Bearer ${NTFY_TOKEN}")
+    local tmpfile errfile http_code curl_rc
+    tmpfile=$(mktemp)
+    errfile=$(mktemp)
+    http_code=$(curl -sS --max-time 10 \
+        "${auth_args[@]}" \
         -H "Title: ${title}" \
         -H "Priority: ${priority}" \
         -H "Tags: ${tags}" \
         -H "Icon: ${NTFY_ICON}" \
         -d "$message" \
-        "${NTFY_URL}/${NTFY_TOPIC}" > /dev/null 2>&1 || true
+        "${NTFY_URL}/${NTFY_TOPIC}" \
+        -o "$tmpfile" -w '%{http_code}' 2>"$errfile")
+    curl_rc=$?
+    if [[ "$curl_rc" -ne 0 ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR ntfy: $(cat "$errfile")" >&2
+        rm -f "$tmpfile" "$errfile"
+        return 1
+    fi
+    if [[ "$http_code" != 2* ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR ntfy: HTTP ${http_code}" >&2
+        rm -f "$tmpfile" "$errfile"
+        return 1
+    fi
+    rm -f "$tmpfile" "$errfile"
+    return 0
 }
+
+# --- Notify every enabled channel ---
+# Usage: notify level title message. Returns 0 if at least one channel delivered.
+notify() {
+    local level="$1" title="$2" message="$3"
+    local telegram_on=false ntfy_on=false
+    [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]] && telegram_on=true
+    [[ -n "$NTFY_URL" && -n "$NTFY_TOPIC" ]] && ntfy_on=true
+    if ! $telegram_on && ! $ntfy_on; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: no notification channel configured (set telegram_chat_id + TELEGRAM_BOT_TOKEN, or ntfy url + topic) — alert NOT sent" >&2
+        return 1
+    fi
+    local delivered=0
+    if $telegram_on; then
+        send_telegram "$level" "$title" "$message" && delivered=1
+    fi
+    if $ntfy_on; then
+        send_ntfy "$level" "$title" "$message" && delivered=1
+    fi
+    if [[ "$delivered" -eq 1 ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# --- Test mode: send a test notification and exit ---
+if [[ "${1:-}" == "--test" ]]; then
+    if notify recovered "HORNET — Prueba" "Los hilos vibran con fuerza. Esta es una prueba de Hornet: si lees esto, las alertas de tu servidor llegan a su destino. 🕸️
+
+Servidor: ${HOSTNAME} | ${NOW}"; then
+        echo "Test notification sent."
+        exit 0
+    else
+        exit 1
+    fi
+fi
 
 # ============================================================
 # CHECKS
@@ -442,15 +566,16 @@ check_recovered
 # BUILD AND SEND MESSAGE
 # ============================================================
 
-# Save current state
-save_state "$CURRENT_ISSUES"
-
-# Only send if there are new alerts, warnings, or recoveries
-# Don't re-alert if issues haven't changed
+# Nothing changed: log the heartbeat and exit without sending
 if [[ "$CURRENT_ISSUES" == "$PREVIOUS_STATE" && -z "$RECOVERED" ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hornet scan complete. Issues: ${CURRENT_ISSUES:-none}"
     exit 0
 fi
 
+# Only send if there are new alerts, warnings, or recoveries
+# Don't re-alert if issues haven't changed
+NOTIFY_LEVEL=""
+NOTIFY_TITLE=""
 if [[ -n "$ALERTS" ]]; then
     MESSAGE="He detectado intrusos en Hallownest.\n\n"
     MESSAGE+="$ALERTS"
@@ -463,7 +588,8 @@ if [[ -n "$ALERTS" ]]; then
     MESSAGE+="Hornet vigila. Hallownest no caerá.\n"
     MESSAGE+="Servidor: ${HOSTNAME} | ${NOW}"
 
-    send_ntfy "HORNET — Shaw!" "$(echo -e "$MESSAGE")" "urgent" "rotating_light,skull"
+    NOTIFY_LEVEL="alert"
+    NOTIFY_TITLE="HORNET — Shaw!"
 
 elif [[ -n "$WARNINGS" ]]; then
     MESSAGE="He encontrado grietas en las defensas de Hallownest.\n\n"
@@ -472,7 +598,8 @@ elif [[ -n "$WARNINGS" ]]; then
     MESSAGE+="Hornet vigila. Siempre.\n"
     MESSAGE+="Servidor: ${HOSTNAME} | ${NOW}"
 
-    send_ntfy "HORNET — Hegale!" "$(echo -e "$MESSAGE")" "high" "warning"
+    NOTIFY_LEVEL="warning"
+    NOTIFY_TITLE="HORNET — Hegale!"
 
 elif [[ -n "$RECOVERED" ]]; then
     MESSAGE="La amenaza ha sido contenida.\n\n"
@@ -481,7 +608,18 @@ elif [[ -n "$RECOVERED" ]]; then
     MESSAGE+="Hallownest permanece protegido.\n"
     MESSAGE+="Servidor: ${HOSTNAME} | ${NOW}"
 
-    send_ntfy "HORNET — Adurá!" "$(echo -e "$MESSAGE")" "default" "white_check_mark,shield"
+    NOTIFY_LEVEL="recovered"
+    NOTIFY_TITLE="HORNET — Adurá!"
+fi
+
+# Send first, save state only on delivery — a failed send keeps the
+# previous state so the next run retries instead of losing the alert
+if [[ -z "$NOTIFY_LEVEL" ]]; then
+    save_state "$CURRENT_ISSUES"
+elif notify "$NOTIFY_LEVEL" "$NOTIFY_TITLE" "$(echo -e "$MESSAGE")"; then
+    save_state "$CURRENT_ISSUES"
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: notification failed — state NOT saved, will retry on next run" >&2
 fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hornet scan complete. Issues: ${CURRENT_ISSUES:-none}"

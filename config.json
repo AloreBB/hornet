@@ -1,7 +1,8 @@
 {
   "notifications": {
-    "url": "https://ntfy.sh",
-    "topic": "my-hornet-alerts",
+    "telegram_chat_id": "",
+    "url": "",
+    "topic": "",
     "icon": ""
   },
   "baseline": {

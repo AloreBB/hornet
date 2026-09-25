@@ -119,7 +119,7 @@ fi
 CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hornet/credentials"
 if [[ ! -f "$CREDENTIALS_FILE" ]]; then
     mkdir -p "$(dirname "$CREDENTIALS_FILE")"
-    printf 'NTFY_TOKEN=\n' > "$CREDENTIALS_FILE"
+    printf 'TELEGRAM_BOT_TOKEN=\nNTFY_TOKEN=\n' > "$CREDENTIALS_FILE"
     chmod 600 "$CREDENTIALS_FILE"
 fi
 
@@ -144,7 +144,7 @@ fi
 
 # ── 6. First-run setup ────────────────────────────────────
 echo
-if gum confirm "  Run initial setup now? (configure ntfy + whitelists)"; then
+if gum confirm "  Run initial setup now? (configure notifications + whitelists)"; then
     "$INSTALL_DIR/hornet" setup
 fi
 
