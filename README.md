@@ -62,9 +62,10 @@ Los tokens se guardan en `~/.config/hornet/credentials` (creado automáticamente
 ```bash
 TELEGRAM_BOT_TOKEN=...   # token del bot de Telegram
 NTFY_TOKEN=...           # token de ntfy (solo si tu servidor lo exige)
+AI_API_KEY=...           # key de MiniMax (solo si usas la IA)
 ```
 
-También puedes exportar `TELEGRAM_BOT_TOKEN` o `NTFY_TOKEN` en tu sesión y Hornet los usará directamente.
+También puedes exportar `TELEGRAM_BOT_TOKEN`, `NTFY_TOKEN` o `AI_API_KEY` en tu sesión y Hornet los usará directamente.
 
 ## Notificaciones
 
@@ -80,6 +81,29 @@ Hornet puede avisar por **Telegram** (canal principal) y/o **ntfy**. Si configur
 El chat ID queda en `config.json` → `notifications.telegram_chat_id` y el token en `~/.config/hornet/credentials`.
 
 **ntfy:** `hornet setup` → *Notifications — ntfy*. Por defecto no viene ningún servidor ni topic configurado: si usas la instancia pública de ntfy.sh, elige un topic imposible de adivinar, porque cualquiera que lo conozca puede leer tus alertas.
+
+## IA (opcional)
+
+Hornet puede agregar un análisis corto a cada alerta 🚨/⚠️ con MiniMax (`MiniMax-M3` por defecto).
+Configura `config.json` → `ai` (`base_url`, `model`, `explain_alerts: true`) y guarda tu key como `AI_API_KEY` en `~/.config/hornet/credentials`.
+Si la IA falla o no está configurada, la alerta se envía igual sin análisis: las alertas nunca dependen de la IA.
+Para chatear con memoria por Telegram, mira [docs/hermes.md](docs/hermes.md) (Hermes Agent + servidor MCP de Hornet).
+
+## Alertas de acceso SSH
+
+Cada login SSH genera un aviso inmediato (🔑 si es con key desde IP conocida, ⚠️ si es con contraseña o IP nueva).
+Copia la plantilla solo si aún no tienes `~/.ssh/rc` (debe haber uno solo y nunca imprimir nada, o rompería scp/sftp):
+
+```bash
+cp ~/.hornet/ssh-rc ~/.ssh/rc
+```
+
+Los accesos de otros usuarios se reportan como "Intruso en la puerta" en el siguiente scan (≤15 min).
+
+## Vigilancia externa (healthchecks.io)
+
+Si Hornet deja de escanear en silencio, nadie se enteraría: configura `healthcheck_url` en `config.json` con tu URL de ping de healthchecks.io.
+Usa periodo 15 min y gracia 15 min (el scan corre cada 15 min). Cada scan hace ping; si una alerta no se pudo entregar, el ping va a `<url>/fail`.
 
 ## Actualizar
 
@@ -127,6 +151,12 @@ hornet uninstall
     "topic": "mis-alertas",
     "icon": ""
   },
+  "ai": {
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "explain_alerts": false
+  },
+  "healthcheck_url": "",
   "baseline": {
     "users": ["root:/bin/bash", "miusuario:/bin/bash"],
     "ssh_keys": ["/home/miusuario/.ssh/authorized_keys:1"],

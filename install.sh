@@ -103,12 +103,17 @@ ok "gum ready"
 # ── 3. Download and install Hornet ────────────────────────
 step "Installing Hornet..."
 
-mkdir -p "$INSTALL_DIR" "$BIN_DIR"
+mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/ai" "$BIN_DIR"
 
 info "Downloading Hornet files..."
 curl -fsSL "$BASE_URL/monitor.sh" -o "$INSTALL_DIR/monitor.sh"
 curl -fsSL "$BASE_URL/hornet"    -o "$INSTALL_DIR/hornet"
-chmod +x "$INSTALL_DIR/monitor.sh" "$INSTALL_DIR/hornet"
+curl -fsSL "$BASE_URL/ai/hornet_tools.py" -o "$INSTALL_DIR/ai/hornet_tools.py"
+curl -fsSL "$BASE_URL/ai/mcp_server.py" -o "$INSTALL_DIR/ai/mcp_server.py"
+curl -fsSL "$BASE_URL/ai/explain.py" -o "$INSTALL_DIR/ai/explain.py"
+curl -fsSL "$BASE_URL/ssh-rc" -o "$INSTALL_DIR/ssh-rc"
+chmod +x "$INSTALL_DIR/monitor.sh" "$INSTALL_DIR/hornet" "$INSTALL_DIR/ssh-rc" \
+    "$INSTALL_DIR/ai/hornet_tools.py" "$INSTALL_DIR/ai/mcp_server.py" "$INSTALL_DIR/ai/explain.py"
 
 # Download config template only if no config exists yet
 if [[ ! -f "$INSTALL_DIR/config.json" ]]; then
@@ -119,7 +124,7 @@ fi
 CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hornet/credentials"
 if [[ ! -f "$CREDENTIALS_FILE" ]]; then
     mkdir -p "$(dirname "$CREDENTIALS_FILE")"
-    printf 'TELEGRAM_BOT_TOKEN=\nNTFY_TOKEN=\n' > "$CREDENTIALS_FILE"
+    printf 'TELEGRAM_BOT_TOKEN=\nNTFY_TOKEN=\nAI_API_KEY=\n' > "$CREDENTIALS_FILE"
     chmod 600 "$CREDENTIALS_FILE"
 fi
 
@@ -154,6 +159,9 @@ ${BOLD}🕸️  Hornet is ready.${RESET}
   ${CYAN}hornet run${RESET}     — Run a scan now
   ${CYAN}hornet setup${RESET}   — Configure notifications & whitelists
   ${CYAN}hornet status${RESET}  — View recent scan history
+  ${CYAN}hornet test${RESET}    — Send a test notification
+
+  SSH alerts: cp ~/.hornet/ssh-rc ~/.ssh/rc (if you don't have one)
 
 Hornet vigila. Hallownest no caerá.
 "

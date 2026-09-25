@@ -5,6 +5,12 @@
     "topic": "",
     "icon": ""
   },
+  "ai": {
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "explain_alerts": false
+  },
+  "healthcheck_url": "",
   "baseline": {
     "users": ["root:/bin/bash", "youruser:/bin/bash"],
     "ssh_keys": ["/home/youruser/.ssh/authorized_keys:1"],

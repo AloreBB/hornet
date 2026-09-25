@@ -125,6 +125,12 @@ cmd_init() {
     "topic": "",
     "icon": ""
   },
+  "ai": {
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "explain_alerts": false
+  },
+  "healthcheck_url": "",
   "baseline": {
     "users": [],
     "ssh_keys": [],
@@ -160,6 +166,12 @@ cmd_setup() {
     "topic": "",
     "icon": ""
   },
+  "ai": {
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "explain_alerts": false
+  },
+  "healthcheck_url": "",
   "baseline": {
     "users": [],
     "ssh_keys": [],
@@ -519,11 +531,15 @@ cmd_help() {
 - \`ext\`        File extension to ignore in /tmp checks (e.g. so)
 
 **Config files:**
-- \`config.json\`                       Whitelists, Telegram chat ID, ntfy URL/topic/icon, baseline
-- \`~/.config/hornet/credentials\`      TELEGRAM_BOT_TOKEN and NTFY_TOKEN — kept outside the repo
+- \`config.json\`                       Whitelists, Telegram chat ID, ntfy URL/topic/icon, baseline, ai (base_url, model, explain_alerts), healthcheck_url
+- \`~/.config/hornet/credentials\`      TELEGRAM_BOT_TOKEN, NTFY_TOKEN and AI_API_KEY — kept outside the repo
 
 **Notifications:** Hornet sends alerts via Telegram and/or ntfy (self-hosted or ntfy.sh).
-Run \`hornet setup\` to configure, or edit \`config.json\` directly."
+Run \`hornet setup\` to configure, or edit \`config.json\` directly.
+
+**AI (optional):** set \`ai.explain_alerts: true\` and \`AI_API_KEY\` to get a short analysis in every alert.
+Chat with memory: see docs/hermes.md (Hermes Agent + Hornet MCP server).
+**SSH alerts:** copy \`ssh-rc\` to \`~/.ssh/rc\` for an instant alert on every login."
     echo
 }
 
@@ -565,15 +581,25 @@ cmd_update() {
 
     echo
     gum spin --spinner dot --title " Downloading Hornet v${remote_version}..." -- bash -c "
+        mkdir -p '${SCRIPT_DIR}/ai' &&
         curl -fsSL '${BASE_RAW_URL}/monitor.sh' -o '${SCRIPT_DIR}/monitor.sh.tmp' &&
         curl -fsSL '${BASE_RAW_URL}/hornet'    -o '${SCRIPT_DIR}/hornet.tmp'    &&
-        curl -fsSL '${BASE_RAW_URL}/VERSION'   -o '${SCRIPT_DIR}/VERSION.tmp'
+        curl -fsSL '${BASE_RAW_URL}/VERSION'   -o '${SCRIPT_DIR}/VERSION.tmp'   &&
+        curl -fsSL '${BASE_RAW_URL}/ai/hornet_tools.py' -o '${SCRIPT_DIR}/ai/hornet_tools.py.tmp' &&
+        curl -fsSL '${BASE_RAW_URL}/ai/mcp_server.py' -o '${SCRIPT_DIR}/ai/mcp_server.py.tmp' &&
+        curl -fsSL '${BASE_RAW_URL}/ai/explain.py' -o '${SCRIPT_DIR}/ai/explain.py.tmp' &&
+        curl -fsSL '${BASE_RAW_URL}/ssh-rc' -o '${SCRIPT_DIR}/ssh-rc.tmp'
     " || { err "Download failed. Try again."; exit 1; }
 
     mv "$SCRIPT_DIR/monitor.sh.tmp" "$SCRIPT_DIR/monitor.sh"
     mv "$SCRIPT_DIR/hornet.tmp"    "$SCRIPT_DIR/hornet"
     mv "$SCRIPT_DIR/VERSION.tmp"   "$SCRIPT_DIR/VERSION"
-    chmod +x "$SCRIPT_DIR/monitor.sh" "$SCRIPT_DIR/hornet"
+    mv "$SCRIPT_DIR/ai/hornet_tools.py.tmp" "$SCRIPT_DIR/ai/hornet_tools.py"
+    mv "$SCRIPT_DIR/ai/mcp_server.py.tmp" "$SCRIPT_DIR/ai/mcp_server.py"
+    mv "$SCRIPT_DIR/ai/explain.py.tmp" "$SCRIPT_DIR/ai/explain.py"
+    mv "$SCRIPT_DIR/ssh-rc.tmp" "$SCRIPT_DIR/ssh-rc"
+    chmod +x "$SCRIPT_DIR/monitor.sh" "$SCRIPT_DIR/hornet" "$SCRIPT_DIR/ssh-rc" \
+        "$SCRIPT_DIR/ai/hornet_tools.py" "$SCRIPT_DIR/ai/mcp_server.py" "$SCRIPT_DIR/ai/explain.py"
 
     # Remove legacy hornet.sh if it exists (renamed to monitor.sh in v1.2.0)
     [[ -f "$SCRIPT_DIR/hornet.sh" ]] && rm -f "$SCRIPT_DIR/hornet.sh"

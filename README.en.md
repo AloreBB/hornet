@@ -62,9 +62,10 @@ Tokens are stored in `~/.config/hornet/credentials` (auto-created by `hornet set
 ```bash
 TELEGRAM_BOT_TOKEN=...   # Telegram bot token
 NTFY_TOKEN=...           # ntfy token (only if your server requires one)
+AI_API_KEY=...           # MiniMax key (only if you use AI)
 ```
 
-You can also export `TELEGRAM_BOT_TOKEN` or `NTFY_TOKEN` in your shell session and Hornet will pick them up directly.
+You can also export `TELEGRAM_BOT_TOKEN`, `NTFY_TOKEN` or `AI_API_KEY` in your shell session and Hornet will pick them up directly.
 
 ## Notifications
 
@@ -80,6 +81,29 @@ Hornet can alert via **Telegram** (primary channel) and/or **ntfy**. If you conf
 The chat ID lives in `config.json` → `notifications.telegram_chat_id` and the token in `~/.config/hornet/credentials`.
 
 **ntfy:** `hornet setup` → *Notifications — ntfy*. No server or topic is configured by default: if you use the public ntfy.sh instance, pick a topic nobody can guess, because anyone who knows it can read your alerts.
+
+## AI (optional)
+
+Hornet can attach a short analysis to every 🚨/⚠️ alert with MiniMax (`MiniMax-M3` by default).
+Set `config.json` → `ai` (`base_url`, `model`, `explain_alerts: true`) and save your key as `AI_API_KEY` in `~/.config/hornet/credentials`.
+If AI fails or is not configured, the alert is still delivered without analysis: alerts never depend on AI.
+To chat with memory over Telegram, see [docs/hermes.md](docs/hermes.md) (Hermes Agent + Hornet MCP server).
+
+## SSH access alerts
+
+Every SSH login triggers an instant alert (🔑 for key logins from a known IP, ⚠️ for password logins or new IPs).
+Copy the template only if you don't have `~/.ssh/rc` yet (there must be just one, and it must never print anything or it would break scp/sftp):
+
+```bash
+cp ~/.hornet/ssh-rc ~/.ssh/rc
+```
+
+Logins by other users are reported as "Intruso en la puerta" on the next scan (≤15 min).
+
+## External watchdog (healthchecks.io)
+
+If Hornet silently stops scanning, nobody would notice: set `healthcheck_url` in `config.json` to your healthchecks.io ping URL.
+Use a 15 min period and 15 min grace (the scan runs every 15 min). Every scan pings; if an alert could not be delivered, the ping goes to `<url>/fail`.
 
 ## Updating
 
@@ -127,6 +151,12 @@ hornet uninstall
     "topic": "my-alerts",
     "icon": ""
   },
+  "ai": {
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "explain_alerts": false
+  },
+  "healthcheck_url": "",
   "baseline": {
     "users": ["root:/bin/bash", "myuser:/bin/bash"],
     "ssh_keys": ["/home/myuser/.ssh/authorized_keys:1"],
