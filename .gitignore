@@ -7,3 +7,6 @@ hornet.log
 
 # Legacy
 .hornet-baseline.conf
+
+# Python
+__pycache__/
