@@ -95,14 +95,25 @@ unaffected because they open a new session on each run.
 
 ## 6. Daily report cron job
 
-Create a Hermes cron job with expression `0 8 * * *`, delivery `telegram` and
-`platform_toolsets.cron: [hornet]` (check the exact option syntax with
-`hermes cron create --help`). Prompt:
+Cron jobs run unattended (nobody can approve anything), so lock the `cron`
+platform to Hornet's read-only tools and drop the delivery header/footer:
 
-> Parte de guardia de Hornet. Usa server_status, docker_ps, docker_stats, hornet_history y ssh_logins(24) y resume en máximo 12 líneas: estado general, alertas de las últimas 24 h, containers caídos o reiniciados, accesos SSH e intentos fallidos, y qué debería revisar hoy.
+```bash
+hermes config set platform_toolsets.cron '[hornet]'
+hermes config set cron.wrap_response false
+hermes cron create "0 8 * * *" "<prompt>" --name "Parte diario de Hornet" --deliver telegram
+```
+
+A prompt that gives a short, human message instead of an ops report:
+
+> Parte diario de Hornet para su dueño, por Telegram. Primero consulta server_status, docker_ps, docker_stats, hornet_history y ssh_logins (24 horas). Después escribe un mensaje CORTO y HUMANO en español, tuteando: máximo 6 líneas, cada una con un emoji; primera línea con saludo y veredicto (🟢/🟡/🔴); sin jerga ni nombres internos de alertas o containers; solo lo que importa; termina con "👉 Hoy:" y máximo 2 cosas concretas (o "nada urgente").
+
+Verify what a cron run really gets (MCP servers are referenced by **server name**; an unknown
+name such as `mcp-hornet` makes Hermes merge *every* enabled MCP server into the platform):
+`_resolve_cron_enabled_toolsets` must return `['hornet']`.
 
 ## 7. Updates
 
 Updates are manual (`hermes update`). After every `hermes update`, re-check with
 `hermes chat --list-toolsets` or the config that `platform_toolsets.telegram`
-is still exactly `memory, session_search, mcp-hornet` — an update may reopen defaults.
+is still exactly `memory, session_search, hornet` (and `cron` is `hornet`) — an update may reopen defaults.
