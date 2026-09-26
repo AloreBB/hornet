@@ -46,7 +46,7 @@ model:
   provider: "minimax"
   default: "MiniMax-M3"
 platform_toolsets:
-  telegram: [memory, session_search, mcp-hornet]
+  telegram: [memory, session_search, hornet]   # MCP servers are referenced by server name
 mcp_servers:
   hornet:
     command: "/usr/bin/python3"
@@ -96,7 +96,7 @@ unaffected because they open a new session on each run.
 ## 6. Daily report cron job
 
 Create a Hermes cron job with expression `0 8 * * *`, delivery `telegram` and
-`enabled_toolsets: [mcp-hornet]` (check the exact option syntax with
+`platform_toolsets.cron: [hornet]` (check the exact option syntax with
 `hermes cron create --help`). Prompt:
 
 > Parte de guardia de Hornet. Usa server_status, docker_ps, docker_stats, hornet_history y ssh_logins(24) y resume en máximo 12 líneas: estado general, alertas de las últimas 24 h, containers caídos o reiniciados, accesos SSH e intentos fallidos, y qué debería revisar hoy.
