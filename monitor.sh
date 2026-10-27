@@ -314,7 +314,9 @@ check_users_and_keys() {
     done
     # Check for new authorized_keys files
     local new_keys
-    new_keys=$(find /home /root -name authorized_keys 2>/dev/null || true)
+    # Only the paths sshd actually reads (default AuthorizedKeysFile). A recursive
+    # find over /home walked node_modules/worktrees and loaded the server every run.
+    new_keys=$(ls -1 /root/.ssh/authorized_keys{,2} /home/*/.ssh/authorized_keys{,2} 2>/dev/null || true)
     while IFS= read -r keyfile; do
         [[ -z "$keyfile" ]] && continue
         if ! echo "$BASELINE_SSH_KEYS" | grep -qF "$keyfile"; then
