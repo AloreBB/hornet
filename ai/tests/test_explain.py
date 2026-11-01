@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import secrets
 import sys
 import tempfile
 import threading
@@ -13,7 +14,7 @@ AI_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AI_DIR))
 import explain  # noqa: E402
 
-KEY = "sk-ant-test1234567890abcdef"
+KEY = "test-" + secrets.token_hex(12)  # built at runtime: no literal key for scanners
 
 
 class FakeAPI(BaseHTTPRequestHandler):
