@@ -188,6 +188,28 @@ class SshTest(MonitorTestBase):
         self.assertIn("⚠️", text)
         self.assertIn("contraseña", text)
 
+    def expire_dedup_window(self, ip="191.95.52.193"):
+        (self.app / "ssh-last-notified").write_text(f"{ip} 1000\n")
+
+    def test_new_channel_on_same_connection_is_silent_after_window(self):
+        # Clients like Argos keep one SSH connection open and open new channels on it
+        # (tmux attach, sftp upload, list-sessions); sshd runs ~/.ssh/rc for each one.
+        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
+        self.ssh_login()
+        self.expire_dedup_window()
+        self.ssh_login()
+        self.assertEqual(len(self.telegram_texts()), 1)
+
+    def test_new_connection_from_same_ip_alerts_after_window(self):
+        self.auth_log.write_text(
+            self.auth_line("publickey", self.USER, "191.95.52.193", 5000)
+            + self.auth_line("publickey", self.USER, "191.95.52.193", 5001)
+        )
+        self.ssh_login(port="5000")
+        self.expire_dedup_window()
+        self.ssh_login(port="5001")
+        self.assertEqual(len(self.telegram_texts()), 2)
+
     def test_ssh_login_without_ssh_connection_is_silent(self):
         res = self.run_monitor("--ssh-login", extra_env={"SSH_CONNECTION": ""})
         self.assertEqual(res.returncode, 0)

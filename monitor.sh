@@ -274,7 +274,18 @@ if [[ "${1:-}" == "--ssh-login" ]]; then
     flock -w 20 9 || exit 0
     last_file="$SCRIPT_DIR/ssh-last-notified"
     known_file="$SCRIPT_DIR/ssh-known-ips"
+    conns_file="$SCRIPT_DIR/ssh-notified-conns"
+    conn="$ssh_ip $ssh_port"
     now_epoch=$(date +%s)
+    # sshd runs ~/.ssh/rc for every session channel, not once per connection. Clients
+    # that keep one connection open (Argos: tmux attach, sftp upload, list-sessions)
+    # would re-alert on each new channel, so alert once per TCP connection.
+    grep -qxF "$conn" "$conns_file" 2>/dev/null && exit 0
+    # Remember this connection; drop entries whose connection is already closed.
+    live=$(ss -Htn state established '( sport = :22 )' 2>/dev/null \
+        | awk '{ p = $4; sub(/:[0-9]+$/, "", p); gsub(/[][]/, "", p); port = $4; sub(/.*:/, "", port); print p " " port }')
+    { grep -sxF -f <(printf '%s\n' "$live") "$conns_file"; echo "$conn"; } > "$conns_file.tmp"
+    mv "$conns_file.tmp" "$conns_file"
     if [[ -f "$last_file" ]]; then
         read -r last_ip last_epoch < "$last_file"
         if [[ "${last_ip:-}" == "$ssh_ip" && $((now_epoch - ${last_epoch:-0})) -lt 600 ]]; then
