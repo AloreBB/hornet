@@ -2,21 +2,23 @@
 # Hornet: SSH access alert. Must print nothing (it would break scp/sftp) and never block the login.
 [ -x "$HOME/.hornet/monitor.sh" ] || exit 0
 # sshd runs this file for every session channel, not once per connection. Identify the
-# connection by its per-connection sshd process (topmost sshd ancestor we own), as
-# "pid starttime" so a recycled PID never matches. Done here, synchronously: once
-# monitor.sh is detached the process chain is gone.
+# connection by its unprivileged per-connection sshd: an sshd we own whose parent is the
+# root-owned sshd [priv] monitor. Keyed "pid starttime" so a recycled PID never matches.
+# Anything else (e.g. a user-run sshd daemon) leaves conn_id empty: no per-connection
+# dedup, only monitor.sh's per-IP window. Done here, synchronously: once monitor.sh is
+# detached the process chain is gone.
 conn_id="" pid=$$
 while [ "${pid:-0}" -gt 1 ] && stat=$(cat "/proc/$pid/stat" 2>/dev/null); do
     comm=${stat#*\(}; comm=${comm%%)*}
-    rest=${stat##*) }
     # shellcheck disable=SC2086 # split the stat fields on purpose
-    set -- $rest
-    if [ "$comm" = sshd ] && [ -O "/proc/$pid" ]; then
-        conn_id="$pid ${20}"
-    elif [ -n "$conn_id" ]; then
+    set -- ${stat##*) }
+    ppid=$2 start=${20}
+    if [ "$comm" = sshd ] && [ -O "/proc/$pid" ] && [ "$ppid" -gt 1 ] && [ ! -O "/proc/$ppid" ] \
+        && pstat=$(cat "/proc/$ppid/stat" 2>/dev/null) && pcomm=${pstat#*\(} && [ "${pcomm%%)*}" = sshd ]; then
+        conn_id="$pid $start"
         break
     fi
-    pid=$2
+    pid=$ppid
 done
 ( HORNET_SSH_CONN_ID="$conn_id" "$HOME/.hornet/monitor.sh" --ssh-login >/dev/null 2>&1 & ) >/dev/null 2>&1
 exit 0

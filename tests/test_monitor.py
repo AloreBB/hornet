@@ -245,8 +245,9 @@ class SshTest(MonitorTestBase):
         self.ssh_login(conn_id=conn)
         self.assertEqual(len(self.telegram_texts()), 2)  # failed attempt + retry on next channel
 
-    def test_ssh_rc_identifies_topmost_owned_sshd(self):
-        # Mimic sshd's chain: per-connection sshd -> per-channel sshd fork -> sh running rc.
+    def test_ssh_rc_skips_dedup_without_root_sshd_monitor(self):
+        # sshd chain where no ancestor sshd has a root-owned sshd parent (e.g. a user-run
+        # sshd daemon): rc must not invent a connection id that could merge connections.
         fake_bin = self.tmp / "fakebin"
         fake_bin.mkdir()
         shutil.copy("/bin/sh", fake_bin / "sshd")
@@ -256,15 +257,14 @@ class SshTest(MonitorTestBase):
         monitor = home / ".hornet" / "monitor.sh"
         monitor.write_text(f'#!/bin/sh\necho "$HORNET_SSH_CONN_ID" > "{out}"\n')
         monitor.chmod(0o755)
-        script = (f'echo "$$ $(cut -d" " -f22 /proc/$$/stat)" > "{self.tmp}/top"; '
-                  f'"{fake_bin}/sshd" -c \'sh "{REPO}/ssh-rc"; :\'; :')
+        script = f'"{fake_bin}/sshd" -c \'sh "{REPO}/ssh-rc"; :\'; :'
         subprocess.run([str(fake_bin / "sshd"), "-c", script], env={"HOME": str(home), "PATH": os.environ["PATH"]},
                        timeout=10, check=True)
         for _ in range(50):
-            if out.exists() and out.read_text().strip():
+            if out.exists():
                 break
             time.sleep(0.1)
-        self.assertEqual(out.read_text().strip(), (self.tmp / "top").read_text().strip())
+        self.assertEqual(out.read_text().strip(), "")
 
     def test_ssh_login_without_ssh_connection_is_silent(self):
         res = self.run_monitor("--ssh-login", extra_env={"SSH_CONNECTION": ""})
