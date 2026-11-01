@@ -199,13 +199,6 @@ class CallToolTest(TmpEnvCase):
         self.assertIn("Causa probable: prueba", out)
 
 
-def fresh(line, seconds_ago=60):
-    """Re-stamp a fixture line as recent: ssh-lookup runs in a subprocess (no _now mock)
-    and only looks at the last day."""
-    ts = (datetime.now(BOG) - timedelta(seconds=seconds_ago)).isoformat(timespec="microseconds")
-    return ts + line[line.index(" "):]
-
-
 class CliTest(TmpEnvCase):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, str(AI_DIR / "hornet_tools.py"), *args],
@@ -221,39 +214,71 @@ class CliTest(TmpEnvCase):
         self.assertEqual(events[0]["method"], "password")
         self.assertEqual(events[0]["key"], "")
 
+    def journal(self, method, user="alore", ip="191.95.52.193", port=5000, pid=11, uid=0, comm="sshd"):
+        msg = f"Accepted {method} for {user} from {ip} port {port} ssh2"
+        if method == "publickey":
+            msg += f": ED25519 {FP}"
+        entry = {"_PID": str(pid), "_UID": str(uid), "_COMM": comm, "MESSAGE": msg}
+        with open(self.journal_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def lookup(self, *args, fail=False):
+        env = os.environ.copy()
+        env.update({"HORNET_JOURNALCTL": str(AI_DIR / "tests" / "fake_journalctl.py"),
+                    "HORNET_FAKE_JOURNAL": str(self.journal_file)})
+        if fail:
+            env["HORNET_FAKE_JOURNAL_FAIL"] = "1"
+        return subprocess.run([sys.executable, str(AI_DIR / "hornet_tools.py"), "ssh-lookup", *args],
+                              capture_output=True, text=True, timeout=30, env=env)
+
+    @property
+    def journal_file(self):
+        return Path(self._tmp.name) / "journal.jsonl"
+
     def test_ssh_lookup_found(self):
-        self.log.write_text(fresh(ISO_PUBKEY) + "\n")
-        res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "5000")
+        self.journal("publickey")
+        res = self.lookup("alore", "191.95.52.193", "5000", "11")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(json.loads(res.stdout)["method"], "publickey")
 
     def test_ssh_lookup_not_found(self):
-        self.log.write_text(fresh(ISO_PUBKEY) + "\n")
-        res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "9999")
+        self.journal("publickey")
+        res = self.lookup("alore", "191.95.52.193", "9999", "11")
         self.assertEqual(res.returncode, 0)
         self.assertEqual(json.loads(res.stdout), {})
 
-    def test_ssh_lookup_filters_by_sshd_pid(self):
-        # Any local user can write "sshd[N]: Accepted ..." to auth.log via logger(1);
-        # only the line from the connection's own sshd monitor counts.
-        forged = ISO_PUBKEY.replace("sshd[11]", "sshd[99]")
-        self.log.write_text(fresh(forged) + "\n")
-        res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "5000", "11")
+    def test_ssh_lookup_ignores_entries_not_from_root_sshd(self):
+        # logger(1) run by a user gets that user's _PID/_UID/_COMM from the kernel.
+        self.journal("publickey", uid=1001)
+        self.journal("publickey", comm="logger")
+        res = self.lookup("alore", "191.95.52.193", "5000", "11")
         self.assertEqual(json.loads(res.stdout), {})
-        res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "5000", "99")
-        self.assertEqual(json.loads(res.stdout)["method"], "publickey")
 
-    def test_ssh_lookup_duplicate_lines_are_ambiguous(self):
-        # A forged line can carry the right pid and an earlier timestamp (rsyslog keeps the
-        # client's timestamp), so neither order nor pid can pick the genuine one: refuse.
-        genuine = fresh(ISO_PUBKEY.replace("publickey", "password").split(" ssh2")[0] + " ssh2", 60)
-        forged = fresh(ISO_PUBKEY, 120)  # backdated: would sort first
-        self.log.write_text(genuine + "\n" + forged + "\n")
-        res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "5000", "11")
+    def test_ssh_lookup_ignores_other_sshd_processes(self):
+        self.journal("publickey", pid=99)
+        res = self.lookup("alore", "191.95.52.193", "5000", "11")
+        self.assertEqual(json.loads(res.stdout), {})
+
+    def test_ssh_lookup_ignores_auth_log(self):
+        # auth.log is syslog-fed and forgeable: it must not decide the method.
+        self.log.write_text(ISO_PUBKEY + "\n")
+        res = self.lookup("alore", "191.95.52.193", "5000", "11")
+        self.assertEqual(json.loads(res.stdout), {})
+
+    def test_ssh_lookup_without_pid_is_unknown(self):
+        self.journal("publickey")
+        res = self.lookup("alore", "191.95.52.193", "5000")
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(json.loads(res.stdout), {})
+
+    def test_ssh_lookup_duplicate_entries_are_ambiguous(self):
+        self.journal("password")
+        self.journal("publickey")
+        res = self.lookup("alore", "191.95.52.193", "5000", "11")
         self.assertEqual(json.loads(res.stdout), {"method": "ambiguous", "key": ""})
 
-    def test_ssh_lookup_unreadable_exits_3(self):
-        res = self.run_cli("ssh-lookup", "alore", "1.2.3.4", "1")
+    def test_ssh_lookup_unreadable_journal_exits_3(self):
+        res = self.lookup("alore", "191.95.52.193", "5000", "11", fail=True)
         self.assertEqual(res.returncode, 3)
 
     def test_tool_command(self):

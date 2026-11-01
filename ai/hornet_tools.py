@@ -87,7 +87,7 @@ def _run(cmd: list[str], timeout: int = 10, merge_stderr: bool = False) -> str:
 _ISO_TS = r"(?P<iso>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?[+-]\d\d:\d\d)"
 _CLASSIC_TS = r"(?P<classic>[A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d)"
 _ACCEPTED = re.compile(
-    rf"^(?:{_ISO_TS}|{_CLASSIC_TS}) \S+ sshd\[(?P<pid>\d+)\]: Accepted (?P<method>\S+) for (?P<user>\S+) "
+    rf"^(?:{_ISO_TS}|{_CLASSIC_TS}) \S+ sshd\[\d+\]: Accepted (?P<method>\S+) for (?P<user>\S+) "
     r"from (?P<ip>[0-9a-fA-F.:]+) port (?P<port>\d+)(?: ssh2)?(?:: \S+ (?P<fp>SHA256:\S+))?")
 _FAILED = re.compile(r"sshd\[\d+\]: Failed \S+ for (?:invalid user )?\S+ from (?P<ip>[0-9a-fA-F.:]+)")
 _TS = re.compile(rf"^(?:{_ISO_TS}|{_CLASSIC_TS})")
@@ -140,7 +140,6 @@ def parse_auth_line(line: str) -> dict | None:
         "user": m.group("user"),
         "ip": m.group("ip"),
         "port": int(m.group("port")),
-        "pid": int(m.group("pid")),
         "method": m.group("method"),
         "fingerprint": m.group("fp"),
     }
@@ -168,6 +167,43 @@ def _auth_log_lines(since: datetime) -> list[str] | None:
         if rotated:
             lines = rotated + lines
     return lines
+
+
+_ACCEPTED_MSG = re.compile(
+    r"^Accepted (?P<method>\S+) for (?P<user>\S+) from (?P<ip>[0-9a-fA-F.:]+) port (?P<port>\d+)"
+    r"(?: ssh2)?(?:: \S+ (?P<fp>SHA256:\S+))?")
+
+
+def journal_accepted(pid: int) -> list[dict] | None:
+    """"Accepted" logins logged by the sshd process `pid`, read from the journal.
+
+    auth.log is fed by syslog, which any local user can write to with logger(1), so it
+    can't say how someone logged in. The journal's _PID/_UID/_COMM fields come from the
+    kernel instead, so a line with _PID=<monitor> _UID=0 _COMM=sshd really came from
+    that root sshd. None if the journal can't be read.
+    """
+    cmd = [os.environ.get("HORNET_JOURNALCTL", "journalctl"), "-q", "--no-pager", "-o", "json",
+           f"_PID={pid}", "_UID=0", "_COMM=sshd"]
+    try:
+        out = _run(cmd)
+    except ToolUnavailable:
+        return None
+    events = []
+    for line in out.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        msg = entry.get("MESSAGE")
+        # Re-check the trusted fields: the match arguments are the filter, this is the guard.
+        if (not isinstance(msg, str) or entry.get("_PID") != str(pid)
+                or entry.get("_UID") != "0" or entry.get("_COMM") != "sshd"):
+            continue
+        m = _ACCEPTED_MSG.match(msg)
+        if m:
+            events.append({"user": m.group("user"), "ip": m.group("ip"), "port": int(m.group("port")),
+                           "method": m.group("method"), "fingerprint": m.group("fp")})
+    return events
 
 
 def accepted_logins(since: datetime) -> list[dict] | None:
@@ -521,20 +557,21 @@ if __name__ == "__main__":
                               "port": ev["port"], "method": ev["method"], "key": ev.get("key", "")}))
     elif cmd == "ssh-lookup":
         lookup_user, lookup_ip, lookup_port = sys.argv[2], sys.argv[3], int(sys.argv[4])
-        # Optional pid of the connection's sshd monitor: the process that logs "Accepted".
+        # pid of the connection's root sshd monitor: the process that logs "Accepted".
+        # Without it the login method can't be verified, so it's reported as unknown.
         lookup_pid = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5].isdigit() else None
-        recent = accepted_logins(_now() - timedelta(days=1))
-        if recent is None:
+        if lookup_pid is None:
+            print("{}")
+            sys.exit(0)
+        events = journal_accepted(lookup_pid)
+        if events is None:
             sys.exit(3)
-        # auth.log is writable by any local user via logger(1), timestamp included, so a
-        # forged line can't be told apart by order. A genuine connection logs exactly one
-        # Accepted line; more than one means someone forged one: report it as ambiguous.
-        matches = [ev for ev in recent
-                   if ev["user"] == lookup_user and ev["ip"] == lookup_ip and ev["port"] == lookup_port
-                   and (lookup_pid is None or ev["pid"] == lookup_pid)]
+        matches = [ev for ev in events
+                   if ev["user"] == lookup_user and ev["ip"] == lookup_ip and ev["port"] == lookup_port]
         if not matches:
             print("{}")
         elif len(matches) > 1:
+            # One connection logs one Accepted line; more can't be genuine.
             print(json.dumps({"method": "ambiguous", "key": ""}))
         else:
             match = matches[0]

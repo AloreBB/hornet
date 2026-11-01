@@ -83,6 +83,8 @@ class MonitorTestBase(unittest.TestCase):
             "TELEGRAM_API_BASE": self.url,
             "HORNET_STATE_FILE": str(self.tmp / "state"),
             "HORNET_AUTH_LOG": str(self.auth_log),
+            "HORNET_JOURNALCTL": str(REPO / "ai" / "tests" / "fake_journalctl.py"),
+            "HORNET_FAKE_JOURNAL": str(self.tmp / "journal.jsonl"),
             "HORNET_AUTHORIZED_KEYS": str(self.tmp / "authorized_keys"),
         })
         if checks is not None:
@@ -158,9 +160,22 @@ class SshTest(MonitorTestBase):
         suffix = " ssh2: ED25519 SHA256:unknownfp" if method == "publickey" else " ssh2"
         return f"{ts} vmi sshd[{pid}]: Accepted {method} for {user} from {ip} port {port}{suffix}\n"
 
-    def ssh_login(self, ip="191.95.52.193", port="5000", conn_id=""):
+    def ssh_login(self, ip="191.95.52.193", port="5000", conn_id=None):
+        """Run the rc hook for a channel; by default on a fresh fake connection."""
+        if conn_id is None:
+            _, conn_id = self.fake_connection()
         return self.run_monitor("--ssh-login", extra_env={"SSH_CONNECTION": f"{ip} {port} 10.0.0.1 22",
                                                           "HORNET_SSH_CONN_ID": conn_id})
+
+    def journal(self, method, user, ip, port, uid=0, comm="sshd"):
+        """Journal entry as logged by the connection's root sshd monitor. The fake
+        connection is a child of this test process, so the monitor pid is os.getpid()."""
+        msg = f"Accepted {method} for {user} from {ip} port {port} ssh2"
+        if method == "publickey":
+            msg += ": ED25519 SHA256:unknownfp"
+        entry = {"_PID": str(os.getpid()), "_UID": str(uid), "_COMM": comm, "MESSAGE": msg}
+        with open(self.tmp / "journal.jsonl", "a") as f:
+            f.write(json.dumps(entry) + "\n")
 
     def fake_connection(self):
         """A live process standing in for a connection's sshd; returns its "pid starttime" id."""
@@ -171,7 +186,7 @@ class SshTest(MonitorTestBase):
         return proc, f"{proc.pid} {stat.rsplit(') ', 1)[1].split()[19]}"
 
     def test_new_ip_is_warning_then_deduplicated(self):
-        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
+        self.journal("publickey", self.USER, "191.95.52.193", 5000)
         res = self.ssh_login()
         self.assertEqual(res.returncode, 0, res.stderr)
         texts = self.telegram_texts()
@@ -183,7 +198,7 @@ class SshTest(MonitorTestBase):
         self.assertEqual(len(self.telegram_texts()), 1)
 
     def test_known_ip_with_key_is_info(self):
-        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
+        self.journal("publickey", self.USER, "191.95.52.193", 5000)
         (self.app / "ssh-known-ips").write_text("191.95.52.193\n")
         self.ssh_login()
         text = self.telegram_texts()[0]
@@ -191,7 +206,7 @@ class SshTest(MonitorTestBase):
         self.assertIn("IP conocida", text)
 
     def test_password_login_is_warning(self):
-        self.auth_log.write_text(self.auth_line("password", self.USER, "191.95.52.193", 5000))
+        self.journal("password", self.USER, "191.95.52.193", 5000)
         (self.app / "ssh-known-ips").write_text("191.95.52.193\n")
         self.ssh_login()
         text = self.telegram_texts()[0]
@@ -204,7 +219,7 @@ class SshTest(MonitorTestBase):
     def test_new_channel_on_same_connection_is_silent_after_window(self):
         # Clients like Argos keep one SSH connection open and open new channels on it
         # (tmux attach, sftp upload, list-sessions); sshd runs ~/.ssh/rc for each one.
-        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
+        self.journal("publickey", self.USER, "191.95.52.193", 5000)
         _, conn = self.fake_connection()
         self.ssh_login(conn_id=conn)
         self.expire_dedup_window()
@@ -212,10 +227,8 @@ class SshTest(MonitorTestBase):
         self.assertEqual(len(self.telegram_texts()), 1)
 
     def test_new_connection_from_same_ip_alerts_after_window(self):
-        self.auth_log.write_text(
-            self.auth_line("publickey", self.USER, "191.95.52.193", 5000)
-            + self.auth_line("publickey", self.USER, "191.95.52.193", 5001)
-        )
+        self.journal("publickey", self.USER, "191.95.52.193", 5000)
+        self.journal("publickey", self.USER, "191.95.52.193", 5001)
         _, first = self.fake_connection()
         _, second = self.fake_connection()
         self.ssh_login(port="5000", conn_id=first)
@@ -225,7 +238,7 @@ class SshTest(MonitorTestBase):
 
     def test_closed_connection_is_forgotten(self):
         # Same ip:port and even a recycled PID must alert again once the old connection closed.
-        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
+        self.journal("publickey", self.USER, "191.95.52.193", 5000)
         proc, conn = self.fake_connection()
         self.ssh_login(conn_id=conn)
         proc.kill()
@@ -237,7 +250,7 @@ class SshTest(MonitorTestBase):
         self.assertNotIn(conn, (self.app / "ssh-notified-conns").read_text().splitlines())
 
     def test_failed_delivery_does_not_silence_the_connection(self):
-        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
+        self.journal("publickey", self.USER, "191.95.52.193", 5000)
         _, conn = self.fake_connection()
         self.srv.telegram_status = 500
         self.ssh_login(conn_id=conn)
@@ -245,35 +258,33 @@ class SshTest(MonitorTestBase):
         self.ssh_login(conn_id=conn)
         self.assertEqual(len(self.telegram_texts()), 2)  # failed attempt + retry on next channel
 
-    def test_forged_auth_line_from_other_pid_is_ignored(self):
-        # The fake connection's parent (this test process) plays the root sshd monitor.
-        _, conn = self.fake_connection()
+    def test_forged_entries_are_ignored(self):
+        # What logger(1) produces: same text, but the user's uid/comm in the trusted fields.
         (self.app / "ssh-known-ips").write_text("191.95.52.193\n")
-        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000, pid=os.getpid() + 1))
-        self.ssh_login(conn_id=conn)
+        self.journal("publickey", self.USER, "191.95.52.193", 5000, uid=1001, comm="logger")
+        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
+        self.ssh_login()
         text = self.telegram_texts()[0]
         self.assertIn("método desconocido", text)
         self.assertIn("⚠️", text)
 
-    def test_duplicate_auth_lines_are_flagged(self):
-        _, conn = self.fake_connection()
+    def test_duplicate_entries_are_flagged(self):
         (self.app / "ssh-known-ips").write_text("191.95.52.193\n")
-        older = datetime.now(BOG) - timedelta(seconds=30)
-        self.auth_log.write_text(self.auth_line("password", self.USER, "191.95.52.193", 5000, pid=os.getpid())
-                                 + self.auth_line("publickey", self.USER, "191.95.52.193", 5000, when=older,
-                                                  pid=os.getpid()))
-        self.ssh_login(conn_id=conn)
+        self.journal("password", self.USER, "191.95.52.193", 5000)
+        self.journal("publickey", self.USER, "191.95.52.193", 5000)
+        self.ssh_login()
         text = self.telegram_texts()[0]
         self.assertIn("falsificado", text)
         self.assertIn("⚠️", text)
 
-    def test_genuine_line_from_monitor_pid_is_used(self):
-        _, conn = self.fake_connection()
+    def test_unverifiable_connection_is_warning(self):
+        # No connection id from ssh-rc: the method can't be checked against the journal.
         (self.app / "ssh-known-ips").write_text("191.95.52.193\n")
-        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000, pid=os.getpid()))
-        self.ssh_login(conn_id=conn)
+        self.journal("publickey", self.USER, "191.95.52.193", 5000)
+        self.ssh_login(conn_id="")
         text = self.telegram_texts()[0]
-        self.assertIn("🔑", text)
+        self.assertIn("método desconocido", text)
+        self.assertIn("⚠️", text)
 
     def test_ssh_rc_skips_dedup_without_root_sshd_monitor(self):
         # sshd chain where no ancestor sshd has a root-owned sshd parent (e.g. a user-run
