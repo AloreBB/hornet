@@ -302,10 +302,16 @@ if [[ "${1:-}" == "--ssh-login" ]]; then
             exit 0
         fi
     fi
-    ssh_method="" ssh_key=""
+    ssh_method="" ssh_key="" monitor_pid=""
+    # The root sshd monitor (parent of the connection's sshd) is the process that logs
+    # "Accepted ...": tie the auth.log line to it so forged lines (logger(1)) don't count.
+    if [[ -n "$conn_id" ]] && conn_stat=$(cat "/proc/${conn_id%% *}/stat" 2>/dev/null); then
+        read -ra fields <<< "${conn_stat##*) }"
+        monitor_pid="${fields[1]:-}"
+    fi
     if command -v python3 &>/dev/null; then
         for _ in 1 2 3; do
-            info=$(python3 "$SCRIPT_DIR/ai/hornet_tools.py" ssh-lookup "$ssh_user" "$ssh_ip" "$ssh_port" 2>/dev/null) || break
+            info=$(python3 "$SCRIPT_DIR/ai/hornet_tools.py" ssh-lookup "$ssh_user" "$ssh_ip" "$ssh_port" $monitor_pid 2>/dev/null) || break
             ssh_method=$(jq -r '.method // empty' <<< "$info")
             ssh_key=$(jq -r '.key // empty' <<< "$info")
             [[ -n "$ssh_method" ]] && break
@@ -317,10 +323,12 @@ if [[ "${1:-}" == "--ssh-login" ]]; then
     case "$ssh_method" in
         publickey) how="key ${ssh_key:-sin comentario}" ;;
         password|keyboard-interactive*) how="con contraseña" ;;
+        ambiguous) how="registro duplicado en auth.log (¿falsificado?)" ;;
         *) how="método desconocido" ;;
     esac
+    # Only a key login from a known IP is routine; anything else is a warning.
     level="info"
-    if [[ "$how" == "con contraseña" || "$ip_known" == false ]]; then level="warning"; fi
+    if [[ "$ssh_method" != publickey || "$ip_known" == false ]]; then level="warning"; fi
     where="IP conocida"; $ip_known || where="IP nueva"
     if notify "$level" "HORNET — Acceso SSH" "${ssh_user} desde ${ssh_ip} (${where}) · ${how} · $(date '+%H:%M')
 Servidor: ${HOSTNAME}"; then

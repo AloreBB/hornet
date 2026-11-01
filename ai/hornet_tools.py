@@ -87,7 +87,7 @@ def _run(cmd: list[str], timeout: int = 10, merge_stderr: bool = False) -> str:
 _ISO_TS = r"(?P<iso>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?[+-]\d\d:\d\d)"
 _CLASSIC_TS = r"(?P<classic>[A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d)"
 _ACCEPTED = re.compile(
-    rf"^(?:{_ISO_TS}|{_CLASSIC_TS}) \S+ sshd\[\d+\]: Accepted (?P<method>\S+) for (?P<user>\S+) "
+    rf"^(?:{_ISO_TS}|{_CLASSIC_TS}) \S+ sshd\[(?P<pid>\d+)\]: Accepted (?P<method>\S+) for (?P<user>\S+) "
     r"from (?P<ip>[0-9a-fA-F.:]+) port (?P<port>\d+)(?: ssh2)?(?:: \S+ (?P<fp>SHA256:\S+))?")
 _FAILED = re.compile(r"sshd\[\d+\]: Failed \S+ for (?:invalid user )?\S+ from (?P<ip>[0-9a-fA-F.:]+)")
 _TS = re.compile(rf"^(?:{_ISO_TS}|{_CLASSIC_TS})")
@@ -140,6 +140,7 @@ def parse_auth_line(line: str) -> dict | None:
         "user": m.group("user"),
         "ip": m.group("ip"),
         "port": int(m.group("port")),
+        "pid": int(m.group("pid")),
         "method": m.group("method"),
         "fingerprint": m.group("fp"),
     }
@@ -520,16 +521,23 @@ if __name__ == "__main__":
                               "port": ev["port"], "method": ev["method"], "key": ev.get("key", "")}))
     elif cmd == "ssh-lookup":
         lookup_user, lookup_ip, lookup_port = sys.argv[2], sys.argv[3], int(sys.argv[4])
+        # Optional pid of the connection's sshd monitor: the process that logs "Accepted".
+        lookup_pid = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5].isdigit() else None
         recent = accepted_logins(_now() - timedelta(days=1))
         if recent is None:
             sys.exit(3)
-        match = None
-        for ev in recent:
-            if ev["user"] == lookup_user and ev["ip"] == lookup_ip and ev["port"] == lookup_port:
-                match = ev
-        if match is None:
+        # auth.log is writable by any local user via logger(1), timestamp included, so a
+        # forged line can't be told apart by order. A genuine connection logs exactly one
+        # Accepted line; more than one means someone forged one: report it as ambiguous.
+        matches = [ev for ev in recent
+                   if ev["user"] == lookup_user and ev["ip"] == lookup_ip and ev["port"] == lookup_port
+                   and (lookup_pid is None or ev["pid"] == lookup_pid)]
+        if not matches:
             print("{}")
+        elif len(matches) > 1:
+            print(json.dumps({"method": "ambiguous", "key": ""}))
         else:
+            match = matches[0]
             print(json.dumps({"method": match["method"],
                               "key": key_comments().get(match.get("fingerprint") or "", "")}))
     else:

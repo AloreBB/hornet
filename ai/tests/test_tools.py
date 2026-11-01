@@ -199,6 +199,13 @@ class CallToolTest(TmpEnvCase):
         self.assertIn("Causa probable: prueba", out)
 
 
+def fresh(line, seconds_ago=60):
+    """Re-stamp a fixture line as recent: ssh-lookup runs in a subprocess (no _now mock)
+    and only looks at the last day."""
+    ts = (datetime.now(BOG) - timedelta(seconds=seconds_ago)).isoformat(timespec="microseconds")
+    return ts + line[line.index(" "):]
+
+
 class CliTest(TmpEnvCase):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, str(AI_DIR / "hornet_tools.py"), *args],
@@ -215,16 +222,35 @@ class CliTest(TmpEnvCase):
         self.assertEqual(events[0]["key"], "")
 
     def test_ssh_lookup_found(self):
-        self.log.write_text(ISO_PUBKEY + "\n")
+        self.log.write_text(fresh(ISO_PUBKEY) + "\n")
         res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "5000")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(json.loads(res.stdout)["method"], "publickey")
 
     def test_ssh_lookup_not_found(self):
-        self.log.write_text(ISO_PUBKEY + "\n")
+        self.log.write_text(fresh(ISO_PUBKEY) + "\n")
         res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "9999")
         self.assertEqual(res.returncode, 0)
         self.assertEqual(json.loads(res.stdout), {})
+
+    def test_ssh_lookup_filters_by_sshd_pid(self):
+        # Any local user can write "sshd[N]: Accepted ..." to auth.log via logger(1);
+        # only the line from the connection's own sshd monitor counts.
+        forged = ISO_PUBKEY.replace("sshd[11]", "sshd[99]")
+        self.log.write_text(fresh(forged) + "\n")
+        res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "5000", "11")
+        self.assertEqual(json.loads(res.stdout), {})
+        res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "5000", "99")
+        self.assertEqual(json.loads(res.stdout)["method"], "publickey")
+
+    def test_ssh_lookup_duplicate_lines_are_ambiguous(self):
+        # A forged line can carry the right pid and an earlier timestamp (rsyslog keeps the
+        # client's timestamp), so neither order nor pid can pick the genuine one: refuse.
+        genuine = fresh(ISO_PUBKEY.replace("publickey", "password").split(" ssh2")[0] + " ssh2", 60)
+        forged = fresh(ISO_PUBKEY, 120)  # backdated: would sort first
+        self.log.write_text(genuine + "\n" + forged + "\n")
+        res = self.run_cli("ssh-lookup", "alore", "191.95.52.193", "5000", "11")
+        self.assertEqual(json.loads(res.stdout), {"method": "ambiguous", "key": ""})
 
     def test_ssh_lookup_unreadable_exits_3(self):
         res = self.run_cli("ssh-lookup", "alore", "1.2.3.4", "1")
