@@ -274,21 +274,31 @@ if [[ "${1:-}" == "--ssh-login" ]]; then
     flock -w 20 9 || exit 0
     last_file="$SCRIPT_DIR/ssh-last-notified"
     known_file="$SCRIPT_DIR/ssh-known-ips"
-    conns_file="$SCRIPT_DIR/ssh-notified-conns"
-    conn="$ssh_ip $ssh_port"
     now_epoch=$(date +%s)
-    # sshd runs ~/.ssh/rc for every session channel, not once per connection. Clients
-    # that keep one connection open (Argos: tmux attach, sftp upload, list-sessions)
-    # would re-alert on each new channel, so alert once per TCP connection.
-    grep -qxF "$conn" "$conns_file" 2>/dev/null && exit 0
-    # Remember this connection; drop entries whose connection is already closed.
-    live=$(ss -Htn state established '( sport = :22 )' 2>/dev/null \
-        | awk '{ p = $4; sub(/:[0-9]+$/, "", p); gsub(/[][]/, "", p); port = $4; sub(/.*:/, "", port); print p " " port }')
-    { grep -sxF -f <(printf '%s\n' "$live") "$conns_file"; echo "$conn"; } > "$conns_file.tmp"
-    mv "$conns_file.tmp" "$conns_file"
+    # sshd runs ~/.ssh/rc for every session channel. Clients that keep one connection
+    # open (Argos: tmux attach, sftp upload, list-sessions) would re-alert on each new
+    # channel, so alert once per connection. ssh-rc passes "pid starttime" of the
+    # connection's sshd process; without it, only the per-IP window below applies.
+    conns_file="$SCRIPT_DIR/ssh-notified-conns"
+    conn_id="${HORNET_SSH_CONN_ID:-}"
+    if [[ -n "$conn_id" ]]; then
+        # Prune first: keep only entries whose sshd process is still the same one.
+        kept=""
+        while read -r c_pid c_start; do
+            [[ "$c_pid" =~ ^[0-9]+$ ]] || continue
+            stat=$(cat "/proc/$c_pid/stat" 2>/dev/null) || continue
+            read -ra fields <<< "${stat##*) }"
+            [[ "${fields[19]:-}" == "$c_start" ]] && kept+="$c_pid $c_start"$'\n'
+        done < <(cat "$conns_file" 2>/dev/null)
+        printf '%s' "$kept" > "$conns_file.tmp" && mv "$conns_file.tmp" "$conns_file"
+        grep -qxF "$conn_id" "$conns_file" && exit 0
+    fi
+    # Mark this connection as notified. Only called once an alert covering it was delivered.
+    remember_conn() { [[ -n "$conn_id" ]] && echo "$conn_id" >> "$conns_file"; return 0; }
     if [[ -f "$last_file" ]]; then
         read -r last_ip last_epoch < "$last_file"
         if [[ "${last_ip:-}" == "$ssh_ip" && $((now_epoch - ${last_epoch:-0})) -lt 600 ]]; then
+            remember_conn
             exit 0
         fi
     fi
@@ -315,6 +325,7 @@ if [[ "${1:-}" == "--ssh-login" ]]; then
     if notify "$level" "HORNET — Acceso SSH" "${ssh_user} desde ${ssh_ip} (${where}) · ${how} · $(date '+%H:%M')
 Servidor: ${HOSTNAME}"; then
         echo "$ssh_ip $now_epoch" > "$last_file"
+        remember_conn
         $ip_known || echo "$ssh_ip" >> "$known_file"
     fi
     exit 0

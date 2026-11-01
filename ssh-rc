@@ -1,5 +1,22 @@
 #!/bin/sh
 # Hornet: SSH access alert. Must print nothing (it would break scp/sftp) and never block the login.
 [ -x "$HOME/.hornet/monitor.sh" ] || exit 0
-( "$HOME/.hornet/monitor.sh" --ssh-login >/dev/null 2>&1 & ) >/dev/null 2>&1
+# sshd runs this file for every session channel, not once per connection. Identify the
+# connection by its per-connection sshd process (topmost sshd ancestor we own), as
+# "pid starttime" so a recycled PID never matches. Done here, synchronously: once
+# monitor.sh is detached the process chain is gone.
+conn_id="" pid=$$
+while [ "${pid:-0}" -gt 1 ] && stat=$(cat "/proc/$pid/stat" 2>/dev/null); do
+    comm=${stat#*\(}; comm=${comm%%)*}
+    rest=${stat##*) }
+    # shellcheck disable=SC2086 # split the stat fields on purpose
+    set -- $rest
+    if [ "$comm" = sshd ] && [ -O "/proc/$pid" ]; then
+        conn_id="$pid ${20}"
+    elif [ -n "$conn_id" ]; then
+        break
+    fi
+    pid=$2
+done
+( HORNET_SSH_CONN_ID="$conn_id" "$HOME/.hornet/monitor.sh" --ssh-login >/dev/null 2>&1 & ) >/dev/null 2>&1
 exit 0

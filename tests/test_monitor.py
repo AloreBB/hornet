@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -157,8 +158,17 @@ class SshTest(MonitorTestBase):
         suffix = " ssh2: ED25519 SHA256:unknownfp" if method == "publickey" else " ssh2"
         return f"{ts} vmi sshd[1]: Accepted {method} for {user} from {ip} port {port}{suffix}\n"
 
-    def ssh_login(self, ip="191.95.52.193", port="5000"):
-        return self.run_monitor("--ssh-login", extra_env={"SSH_CONNECTION": f"{ip} {port} 10.0.0.1 22"})
+    def ssh_login(self, ip="191.95.52.193", port="5000", conn_id=""):
+        return self.run_monitor("--ssh-login", extra_env={"SSH_CONNECTION": f"{ip} {port} 10.0.0.1 22",
+                                                          "HORNET_SSH_CONN_ID": conn_id})
+
+    def fake_connection(self):
+        """A live process standing in for a connection's sshd; returns its "pid starttime" id."""
+        proc = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        stat = Path(f"/proc/{proc.pid}/stat").read_text()
+        return proc, f"{proc.pid} {stat.rsplit(') ', 1)[1].split()[19]}"
 
     def test_new_ip_is_warning_then_deduplicated(self):
         self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
@@ -195,9 +205,10 @@ class SshTest(MonitorTestBase):
         # Clients like Argos keep one SSH connection open and open new channels on it
         # (tmux attach, sftp upload, list-sessions); sshd runs ~/.ssh/rc for each one.
         self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
-        self.ssh_login()
+        _, conn = self.fake_connection()
+        self.ssh_login(conn_id=conn)
         self.expire_dedup_window()
-        self.ssh_login()
+        self.ssh_login(conn_id=conn)
         self.assertEqual(len(self.telegram_texts()), 1)
 
     def test_new_connection_from_same_ip_alerts_after_window(self):
@@ -205,10 +216,55 @@ class SshTest(MonitorTestBase):
             self.auth_line("publickey", self.USER, "191.95.52.193", 5000)
             + self.auth_line("publickey", self.USER, "191.95.52.193", 5001)
         )
-        self.ssh_login(port="5000")
+        _, first = self.fake_connection()
+        _, second = self.fake_connection()
+        self.ssh_login(port="5000", conn_id=first)
         self.expire_dedup_window()
-        self.ssh_login(port="5001")
+        self.ssh_login(port="5001", conn_id=second)
         self.assertEqual(len(self.telegram_texts()), 2)
+
+    def test_closed_connection_is_forgotten(self):
+        # Same ip:port and even a recycled PID must alert again once the old connection closed.
+        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
+        proc, conn = self.fake_connection()
+        self.ssh_login(conn_id=conn)
+        proc.kill()
+        proc.wait()
+        self.expire_dedup_window()
+        _, new_conn = self.fake_connection()
+        self.ssh_login(conn_id=new_conn)
+        self.assertEqual(len(self.telegram_texts()), 2)
+        self.assertNotIn(conn, (self.app / "ssh-notified-conns").read_text().splitlines())
+
+    def test_failed_delivery_does_not_silence_the_connection(self):
+        self.auth_log.write_text(self.auth_line("publickey", self.USER, "191.95.52.193", 5000))
+        _, conn = self.fake_connection()
+        self.srv.telegram_status = 500
+        self.ssh_login(conn_id=conn)
+        self.srv.telegram_status = 200
+        self.ssh_login(conn_id=conn)
+        self.assertEqual(len(self.telegram_texts()), 2)  # failed attempt + retry on next channel
+
+    def test_ssh_rc_identifies_topmost_owned_sshd(self):
+        # Mimic sshd's chain: per-connection sshd -> per-channel sshd fork -> sh running rc.
+        fake_bin = self.tmp / "fakebin"
+        fake_bin.mkdir()
+        shutil.copy("/bin/sh", fake_bin / "sshd")
+        home = self.tmp / "rc-home"
+        (home / ".hornet").mkdir(parents=True)
+        out = self.tmp / "rc-out"
+        monitor = home / ".hornet" / "monitor.sh"
+        monitor.write_text(f'#!/bin/sh\necho "$HORNET_SSH_CONN_ID" > "{out}"\n')
+        monitor.chmod(0o755)
+        script = (f'echo "$$ $(cut -d" " -f22 /proc/$$/stat)" > "{self.tmp}/top"; '
+                  f'"{fake_bin}/sshd" -c \'sh "{REPO}/ssh-rc"; :\'; :')
+        subprocess.run([str(fake_bin / "sshd"), "-c", script], env={"HOME": str(home), "PATH": os.environ["PATH"]},
+                       timeout=10, check=True)
+        for _ in range(50):
+            if out.exists() and out.read_text().strip():
+                break
+            time.sleep(0.1)
+        self.assertEqual(out.read_text().strip(), (self.tmp / "top").read_text().strip())
 
     def test_ssh_login_without_ssh_connection_is_silent(self):
         res = self.run_monitor("--ssh-login", extra_env={"SSH_CONNECTION": ""})
