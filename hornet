@@ -19,9 +19,9 @@ BASE_RAW_URL="https://raw.githubusercontent.com/AloreBB/hornet/main"
 RED='\033[38;2;182;89;94m'; GREEN='\033[38;2;226;212;177m'; CYAN='\033[38;2;176;150;189m'
 BOLD='\033[1m'; RESET='\033[0m'
 
-err()  { gum log --level error "$*" 2>/dev/null || echo -e "${RED}✖ $*${RESET}" >&2; }
-ok()   { gum log --level info  "$*" 2>/dev/null || echo -e "${GREEN}✔ $*${RESET}"; }
-info() { gum log --level debug "$*" 2>/dev/null || echo -e "${CYAN}→ $*${RESET}"; }
+err()  { gum style --foreground '#b6595e' "✖ $*" >&2; }
+ok()   { gum style --foreground '#e2d4b1' "✔ $*"; }
+info() { gum style --foreground '#b096bd' "→ $*"; }
 
 # ── Dependency check ──────────────────────────────────────
 if ! command -v gum &>/dev/null; then
@@ -58,7 +58,20 @@ header() {
 prompt_input()    { gum input --prompt "  ${1}: " --placeholder "${2:-}" --value "${3:-}" --prompt.foreground '#b096bd'; }
 prompt_password() { gum input --prompt "  ${1}: " --placeholder "tk_..." --password --prompt.foreground '#b096bd'; }
 prompt_choose()   { local h="$1"; shift; gum choose --header "  $h" --cursor "❯ " --cursor.foreground '#b6595e' --selected.foreground '#b96f78' "$@"; }
-prompt_confirm()  { gum confirm --affirmative "Yes" --negative "No" --selected.foreground '#e2d4b1' --unselected.foreground '#b096bd' "  $1"; }
+prompt_confirm() {
+    gum confirm --affirmative "Yes" --negative "No" \
+        --selected.foreground '#e2d4b1' --unselected.foreground '#b096bd' \
+        "  $1" 2>/dev/null
+    local code=$?
+    if [[ $code -le 1 || $code -eq 130 ]]; then
+        return $code  # 0=Yes, 1=No, 130=Ctrl+C — gum worked normally
+    fi
+    # gum failed (incompatible flags, old version, etc.) — plain text fallback
+    printf "  %s [y/N] " "$1" >&2
+    local answer
+    read -r answer </dev/tty
+    [[ "${answer,,}" =~ ^y ]]
+}
 
 prompt_filter() {
     # Fuzzy-pick from a list. Usage: prompt_filter "placeholder" item1 item2 ...
