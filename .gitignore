@@ -3,6 +3,7 @@
 
 # Runtime
 hornet.log
+hornet.json
 /tmp/.hornet-state
 
 # Legacy
