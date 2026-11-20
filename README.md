@@ -4,7 +4,7 @@
 
 > *Hornet vigila. Hallownest no caerá.*
 
-Monitor de seguridad ligero para servidores Linux. Corre cada 15 minutos, detecta amenazas y envía alertas push via [ntfy](https://ntfy.sh).
+Monitor de seguridad ligero para servidores Linux. Corre cada 15 minutos, detecta amenazas y envía alertas a Telegram o via push con [ntfy](https://ntfy.sh).
 
 ## ¿Qué detecta?
 
@@ -27,7 +27,7 @@ Monitor de seguridad ligero para servidores Linux. Corre cada 15 minutos, detect
 
 - `bash`, `jq`, `docker`
 - [`gum`](https://github.com/charmbracelet/gum) — se instala automáticamente con `install.sh`
-- Servidor [ntfy](https://ntfy.sh) (instancia pública gratuita o self-hosted)
+- Un bot de Telegram (canal principal recomendado) o un servidor [ntfy](https://ntfy.sh) (instancia pública gratuita o self-hosted)
 
 ## Instalación
 
@@ -47,7 +47,7 @@ El instalador:
 
 ```bash
 hornet init     # crea config.json desde cero
-hornet setup    # wizard interactivo (ntfy, listas blancas)
+hornet setup    # wizard interactivo (Telegram, ntfy, listas blancas)
 ```
 
 El repo ya incluye `config.json` con valores de ejemplo. Solo edítalo con tus datos:
@@ -57,13 +57,53 @@ hornet setup    # recomendado: wizard interactivo
 # o edita config.json directamente
 ```
 
-El token de ntfy se guarda en `~/.config/hornet/credentials` (creado automáticamente por `hornet setup`, fuera del repo):
+Los tokens se guardan en `~/.config/hornet/credentials` (creado automáticamente por `hornet setup`, fuera del repo):
 
 ```bash
-hornet setup    # guarda el token en ~/.config/hornet/credentials
+TELEGRAM_BOT_TOKEN=...   # token del bot de Telegram
+NTFY_TOKEN=...           # token de ntfy (solo si tu servidor lo exige)
+AI_API_KEY=...           # key de MiniMax (solo si usas la IA)
 ```
 
-También puedes exportar `NTFY_TOKEN` en tu sesión y Hornet lo usará directamente.
+También puedes exportar `TELEGRAM_BOT_TOKEN`, `NTFY_TOKEN` o `AI_API_KEY` en tu sesión y Hornet los usará directamente.
+
+## Notificaciones
+
+Hornet puede avisar por **Telegram** (canal principal) y/o **ntfy**. Si configuras ambos, cada alerta llega a los dos.
+
+**Telegram:**
+
+1. Crea un bot con [@BotFather](https://t.me/BotFather) (envíale `/newbot`) y copia el token.
+2. Envíale cualquier mensaje a tu bot (así Hornet puede encontrar tu chat).
+3. Corre `hornet setup` → *Notifications — Telegram*: pega el token, el wizard detecta tu chat ID automáticamente.
+4. Verifica con `hornet test` — si lees la prueba, las alertas llegan a su destino.
+
+El chat ID queda en `config.json` → `notifications.telegram_chat_id` y el token en `~/.config/hornet/credentials`.
+
+**ntfy:** `hornet setup` → *Notifications — ntfy*. Por defecto no viene ningún servidor ni topic configurado: si usas la instancia pública de ntfy.sh, elige un topic imposible de adivinar, porque cualquiera que lo conozca puede leer tus alertas.
+
+## IA (opcional)
+
+Hornet puede agregar un análisis corto a cada alerta 🚨/⚠️ con MiniMax (`MiniMax-M3` por defecto).
+Configura `config.json` → `ai` (`base_url`, `model`, `explain_alerts: true`) y guarda tu key como `AI_API_KEY` en `~/.config/hornet/credentials`.
+Si la IA falla o no está configurada, la alerta se envía igual sin análisis: las alertas nunca dependen de la IA.
+Para chatear con memoria por Telegram, mira [docs/hermes.md](docs/hermes.md) (Hermes Agent + servidor MCP de Hornet).
+
+## Alertas de acceso SSH
+
+Cada login SSH genera un aviso inmediato (🔑 si es con key desde IP conocida, ⚠️ si es con contraseña o IP nueva).
+Copia la plantilla solo si aún no tienes `~/.ssh/rc` (debe haber uno solo y nunca imprimir nada, o rompería scp/sftp):
+
+```bash
+cp ~/.hornet/ssh-rc ~/.ssh/rc
+```
+
+Los accesos de otros usuarios se reportan como "Intruso en la puerta" en el siguiente scan (≤15 min).
+
+## Vigilancia externa (healthchecks.io)
+
+Si Hornet deja de escanear en silencio, nadie se enteraría: configura `healthcheck_url` en `config.json` con tu URL de ping de healthchecks.io.
+Usa periodo 15 min y gracia 15 min (el scan corre cada 15 min). Cada scan hace ping; si una alerta no se pudo entregar, el ping va a `<url>/fail`.
 
 ## Actualizar
 
@@ -81,6 +121,9 @@ hornet run
 
 # Ver historial de scans
 hornet status
+
+# Enviar una notificación de prueba
+hornet test
 
 # Gestionar lista blanca (interactivo)
 hornet whitelist
@@ -103,10 +146,17 @@ hornet uninstall
 ```json
 {
   "notifications": {
+    "telegram_chat_id": "123456789",
     "url": "https://ntfy.sh",
     "topic": "mis-alertas",
     "icon": ""
   },
+  "ai": {
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "explain_alerts": false
+  },
+  "healthcheck_url": "",
   "baseline": {
     "users": ["root:/bin/bash", "miusuario:/bin/bash"],
     "ssh_keys": ["/home/miusuario/.ssh/authorized_keys:1"],
@@ -169,7 +219,7 @@ crontab -l | md5sum | cut -d' ' -f1
 hornet setup
 ```
 
-## Las alertas se ven así (via ntfy)
+## Las alertas se ven así (via Telegram o ntfy)
 
 **🔴 Alerta crítica:**
 > ⚔️ PUERTO EXPUESTO — Puerto 5432 (PostgreSQL) abierto a internet en contenedor "mydb". Ciérralo YA.

@@ -8,3 +8,6 @@ hornet.json
 
 # Legacy
 .hornet-baseline.conf
+
+# Python
+__pycache__/

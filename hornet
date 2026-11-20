@@ -5,7 +5,8 @@
 
 set -eo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the symlink install.sh puts on PATH, or config.json is looked up next to the link
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
 CREDENTIALS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hornet/credentials"
 ENV_FILE="$SCRIPT_DIR/.hornet.env"   # legacy fallback
@@ -45,7 +46,28 @@ require_config() {
 }
 
 jq_get()    { jq -r "$1" "$CONFIG_FILE"; }
-jq_update() { local tmp; tmp=$(jq "$1" "$CONFIG_FILE") && echo "$tmp" > "$CONFIG_FILE"; }
+jq_update() { local filter="$1"; shift; local tmp; tmp=$(jq "$@" "$filter" "$CONFIG_FILE") && echo "$tmp" > "$CONFIG_FILE"; }
+
+# ── Credentials helper ────────────────────────────────────
+# Adds or replaces a KEY=VALUE line, preserving every other line
+set_credential() {
+    local key="$1" value="$2" tmp found=false line
+    mkdir -p "$(dirname "$CREDENTIALS_FILE")"
+    [[ -f "$CREDENTIALS_FILE" ]] || : > "$CREDENTIALS_FILE"
+    chmod 600 "$CREDENTIALS_FILE"
+    tmp=$(mktemp)
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == "${key}="* ]]; then
+            printf '%s=%s\n' "$key" "$value" >> "$tmp"
+            found=true
+        else
+            printf '%s\n' "$line" >> "$tmp"
+        fi
+    done < "$CREDENTIALS_FILE"
+    $found || printf '%s=%s\n' "$key" "$value" >> "$tmp"
+    mv "$tmp" "$CREDENTIALS_FILE"
+    chmod 600 "$CREDENTIALS_FILE"
+}
 
 # ── UI helpers ────────────────────────────────────────────
 header() {
@@ -111,10 +133,17 @@ cmd_init() {
     cat > "$CONFIG_FILE" <<'EOF'
 {
   "notifications": {
+    "telegram_chat_id": "",
     "url": "",
     "topic": "",
     "icon": ""
   },
+  "ai": {
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "explain_alerts": false
+  },
+  "healthcheck_url": "",
   "baseline": {
     "users": [],
     "ssh_keys": [],
@@ -131,6 +160,9 @@ EOF
     chmod 600 "$CONFIG_FILE"
     ok "Created hornet.json"
     echo
+    if prompt_confirm "Set up Telegram notifications now?"; then
+        _setup_telegram
+    fi
     if prompt_confirm "Set up ntfy notifications now?"; then
         _setup_ntfy
     fi
@@ -142,10 +174,17 @@ cmd_setup() {
         cat > "$CONFIG_FILE" <<'EOF'
 {
   "notifications": {
-    "url": "https://ntfy.sh",
-    "topic": "my-hornet-alerts",
+    "telegram_chat_id": "",
+    "url": "",
+    "topic": "",
     "icon": ""
   },
+  "ai": {
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "explain_alerts": false
+  },
+  "healthcheck_url": "",
   "baseline": {
     "users": [],
     "ssh_keys": [],
@@ -167,7 +206,8 @@ EOF
     header "🕸️  HORNET — Setup"
     local section
     section=$(prompt_choose "What do you want to configure?" \
-        "🔔  Notifications (ntfy)" \
+        "📨  Notifications — Telegram" \
+        "🔔  Notifications — ntfy" \
         "🔌  Whitelist — ports" \
         "⚙️   Whitelist — processes" \
         "🐳  Whitelist — containers" \
@@ -175,13 +215,78 @@ EOF
         "✖   Exit") || true
     echo
     case "$section" in
-        *"Notifications"*)  _setup_ntfy ;;
+        *"Telegram"*)       _setup_telegram ;;
+        *"ntfy"*)           _setup_ntfy ;;
         *"ports"*)          _setup_whitelist_interactive "ports" "port" ;;
         *"processes"*)      _setup_whitelist_interactive "processes" "process" ;;
         *"containers"*)     _setup_whitelist_interactive "containers" "container" ;;
         *"extensions"*)     _setup_whitelist_interactive "extensions" "ext" ;;
         *"Exit"*|"") exit 0 ;;
     esac
+}
+
+_setup_telegram() {
+    header "📨  Notifications — Telegram"
+
+    gum format -- \
+"Create a bot with **@BotFather** on Telegram (send it \`/newbot\`) and copy the token. Then send any message to your new bot so Hornet can find your chat."
+    echo
+
+    local current_token=""
+    if [[ -f "$CREDENTIALS_FILE" ]]; then
+        current_token=$(grep '^TELEGRAM_BOT_TOKEN=' "$CREDENTIALS_FILE" | cut -d= -f2- || true)
+    fi
+    if [[ -z "$current_token" && -f "$ENV_FILE" ]]; then
+        current_token=$(grep '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- || true)
+    fi
+
+    local token
+    token=$(gum input --prompt "  Bot token: " --placeholder "123456:ABC-DEF..." --password --prompt.foreground '#b096bd' || true)
+    if [[ -z "$token" ]]; then
+        token="$current_token"
+    fi
+    if [[ -z "$token" ]]; then
+        err "No bot token provided."
+        echo
+        return
+    fi
+
+    info "Looking for your chat..."
+    local detected=""
+    detected=$(curl -fsS --max-time 10 "https://api.telegram.org/bot${token}/getUpdates" 2>/dev/null \
+        | jq -r '[.result[] | (.message // .channel_post) | .chat.id] | last // empty' 2>/dev/null || true)
+    if [[ -n "$detected" ]]; then
+        info "Detected chat ID: $detected"
+    fi
+
+    local current_chat
+    current_chat=$(jq_get '.notifications.telegram_chat_id // ""')
+    local default_chat="${current_chat:-$detected}"
+    local chat_id
+    chat_id=$(prompt_input "Chat ID" "$default_chat" "$default_chat")
+    if [[ -z "$chat_id" ]]; then
+        chat_id="$default_chat"
+    fi
+    if [[ -z "$chat_id" ]]; then
+        err "No chat ID provided. Send a message to your bot first, then retry."
+        echo
+        return
+    fi
+
+    set_credential TELEGRAM_BOT_TOKEN "$token"
+    ok "Token saved to $CREDENTIALS_FILE"
+    jq_update '.notifications.telegram_chat_id = $v' --arg v "$chat_id"
+
+    ok "Notifications configured."
+    echo
+    if prompt_confirm "Send a test notification now?"; then
+        if bash "$MONITOR" --test; then
+            ok "Test sent via Telegram"
+        else
+            err "Test failed. Check your token and chat ID."
+        fi
+    fi
+    echo
 }
 
 _setup_ntfy() {
@@ -204,14 +309,10 @@ _setup_ntfy() {
          .notifications.icon  = \"$icon\""
 
     if [[ -n "$token" ]]; then
-        mkdir -p "$(dirname "$CREDENTIALS_FILE")"
-        printf 'NTFY_TOKEN=%s\n' "$token" > "$CREDENTIALS_FILE"
-        chmod 600 "$CREDENTIALS_FILE"
+        set_credential NTFY_TOKEN "$token"
         ok "Token saved to $CREDENTIALS_FILE"
     elif [[ ! -f "$CREDENTIALS_FILE" ]]; then
-        mkdir -p "$(dirname "$CREDENTIALS_FILE")"
-        printf 'NTFY_TOKEN=\n' > "$CREDENTIALS_FILE"
-        chmod 600 "$CREDENTIALS_FILE"
+        set_credential NTFY_TOKEN ""
     fi
 
     ok "Notifications configured."
@@ -303,6 +404,15 @@ cmd_status() {
     } | gum table --border rounded --border.foreground 240 \
         --widths 12,10,50
     echo
+}
+
+cmd_test() {
+    require_config
+    if bash "$MONITOR" --test; then
+        ok "Test passed — check your Telegram / ntfy for the alert."
+    else
+        err "Test failed — check your notification settings."
+    fi
 }
 
 cmd_whitelist() {
@@ -417,6 +527,7 @@ cmd_help() {
 **Commands:**
 - \`run\`                          Run a security scan now
 - \`status\`                       Show recent scan history
+- \`test\`                         Send a test notification
 - \`setup\`                        Interactive configuration wizard
 - \`init\`                         Create a fresh config.json
 - \`update\`                       Update Hornet to the latest version
@@ -433,11 +544,15 @@ cmd_help() {
 - \`ext\`        File extension to ignore in /tmp checks (e.g. so)
 
 **Config files:**
-- \`config.json\`                       Whitelists, ntfy URL/topic/icon, baseline
-- \`~/.config/hornet/credentials\`      ntfy token — kept outside the repo
+- \`config.json\`                       Whitelists, Telegram chat ID, ntfy URL/topic/icon, baseline, ai (base_url, model, explain_alerts), healthcheck_url
+- \`~/.config/hornet/credentials\`      TELEGRAM_BOT_TOKEN, NTFY_TOKEN and AI_API_KEY — kept outside the repo
 
-**Notifications:** Hornet sends alerts via ntfy (self-hosted or ntfy.sh).
-Run \`hornet setup\` to configure, or edit \`config.json\` directly."
+**Notifications:** Hornet sends alerts via Telegram and/or ntfy (self-hosted or ntfy.sh).
+Run \`hornet setup\` to configure, or edit \`config.json\` directly.
+
+**AI (optional):** set \`ai.explain_alerts: true\` and \`AI_API_KEY\` to get a short analysis in every alert.
+Chat with memory: see docs/hermes.md (Hermes Agent + Hornet MCP server).
+**SSH alerts:** copy \`ssh-rc\` to \`~/.ssh/rc\` for an instant alert on every login."
     echo
 }
 
@@ -479,18 +594,35 @@ cmd_update() {
 
     echo
     gum spin --spinner dot --title " Downloading Hornet v${remote_version}..." -- bash -c "
+        mkdir -p '${SCRIPT_DIR}/ai' &&
         curl -fsSL '${BASE_RAW_URL}/monitor.sh' -o '${SCRIPT_DIR}/monitor.sh.tmp' &&
         curl -fsSL '${BASE_RAW_URL}/hornet'    -o '${SCRIPT_DIR}/hornet.tmp'    &&
-        curl -fsSL '${BASE_RAW_URL}/VERSION'   -o '${SCRIPT_DIR}/VERSION.tmp'
+        curl -fsSL '${BASE_RAW_URL}/VERSION'   -o '${SCRIPT_DIR}/VERSION.tmp'   &&
+        curl -fsSL '${BASE_RAW_URL}/ai/hornet_tools.py' -o '${SCRIPT_DIR}/ai/hornet_tools.py.tmp' &&
+        curl -fsSL '${BASE_RAW_URL}/ai/mcp_server.py' -o '${SCRIPT_DIR}/ai/mcp_server.py.tmp' &&
+        curl -fsSL '${BASE_RAW_URL}/ai/explain.py' -o '${SCRIPT_DIR}/ai/explain.py.tmp' &&
+        curl -fsSL '${BASE_RAW_URL}/ssh-rc' -o '${SCRIPT_DIR}/ssh-rc.tmp'
     " || { err "Download failed. Try again."; exit 1; }
 
     mv "$SCRIPT_DIR/monitor.sh.tmp" "$SCRIPT_DIR/monitor.sh"
     mv "$SCRIPT_DIR/hornet.tmp"    "$SCRIPT_DIR/hornet"
     mv "$SCRIPT_DIR/VERSION.tmp"   "$SCRIPT_DIR/VERSION"
-    chmod +x "$SCRIPT_DIR/monitor.sh" "$SCRIPT_DIR/hornet"
+    mv "$SCRIPT_DIR/ai/hornet_tools.py.tmp" "$SCRIPT_DIR/ai/hornet_tools.py"
+    mv "$SCRIPT_DIR/ai/mcp_server.py.tmp" "$SCRIPT_DIR/ai/mcp_server.py"
+    mv "$SCRIPT_DIR/ai/explain.py.tmp" "$SCRIPT_DIR/ai/explain.py"
+    mv "$SCRIPT_DIR/ssh-rc.tmp" "$SCRIPT_DIR/ssh-rc"
+    chmod +x "$SCRIPT_DIR/monitor.sh" "$SCRIPT_DIR/hornet" "$SCRIPT_DIR/ssh-rc" \
+        "$SCRIPT_DIR/ai/hornet_tools.py" "$SCRIPT_DIR/ai/mcp_server.py" "$SCRIPT_DIR/ai/explain.py"
 
     # Remove legacy hornet.sh if it exists (renamed to monitor.sh in v1.2.0)
     [[ -f "$SCRIPT_DIR/hornet.sh" ]] && rm -f "$SCRIPT_DIR/hornet.sh"
+
+    # Migrate crontab lines still pointing at hornet.sh (every cron run
+    # since v1.2.0 failed with "hornet.sh: not found")
+    if crontab -l 2>/dev/null | grep -qF "$SCRIPT_DIR/hornet.sh"; then
+        (crontab -l 2>/dev/null | sed "s|$SCRIPT_DIR/hornet.sh|$SCRIPT_DIR/monitor.sh|g") | crontab -
+        ok "Crontab migrated from hornet.sh to monitor.sh."
+    fi
 
     ok "Updated to v${remote_version}. Your config.json is untouched."
     echo
@@ -541,6 +673,7 @@ case "${1:-}" in
     init)      cmd_init ;;
     setup)     cmd_setup ;;
     status)    cmd_status ;;
+    test)      cmd_test ;;
     update)    cmd_update ;;
     whitelist) cmd_whitelist "${@:2}" ;;
     uninstall) cmd_uninstall ;;
